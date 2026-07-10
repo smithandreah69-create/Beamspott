@@ -1,0 +1,6 @@
+{
+  "name": "BeamSpot",
+  "description": "Peer-to-peer internet sharing marketplace. Set up your hotspot or router, set your price, and earn automatically. Connect nearby with zero passwords, simple local payments.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
