@@ -1,4 +1,4 @@
-package com.example
+package com.smithandreah69.beamspot
 
 import android.Manifest
 import android.content.Intent

@@ -1,4 +1,4 @@
-package com.example
+package com.smithandreah69.beamspot
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -54,8 +54,8 @@ class BeamSpotVpnService : VpnService() {
     private val captivePortalIp = "10.8.0.1"
 
     companion object {
-        const val ACTION_START = "com.example.VPN_START"
-        const val ACTION_STOP  = "com.example.VPN_STOP"
+        const val ACTION_START = "com.smithandreah69.beamspot.VPN_START"
+        const val ACTION_STOP  = "com.smithandreah69.beamspot.VPN_STOP"
         const val CHANNEL_ID   = "beamspot_vpn"
         const val NOTIF_ID     = 1001
         var isRunning = false

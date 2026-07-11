@@ -1,4 +1,4 @@
-package com.example
+package com.smithandreah69.beamspot
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -15,7 +15,7 @@ class ExampleRobolectricTest {
   @Test
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
-    val appName = context.getString(R.string.app_name)
-    assertEquals("My Application", appName)
+    val appName = context.getString(com.smithandreah69.beamspot.R.string.app_name)
+    assertEquals("BeamSpot", appName)
   }
 }

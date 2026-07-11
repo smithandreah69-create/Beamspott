@@ -10,11 +10,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.smithandreah69.beamspot"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.beamspot.vshqpx"
+    applicationId = "com.smithandreah69.beamspot"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -23,7 +23,7 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID") ?: "YOUR_WEB_CLIENT_ID_HERE"
     buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
-    buildConfigField("String", "API_BASE_URL", "\"https://your-backend.railway.app\"")
+    buildConfigField("String", "API_BASE_URL", "\"https://beamspott.up.railway.app\"")
   }
 
   signingConfigs {

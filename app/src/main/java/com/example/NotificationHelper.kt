@@ -1,4 +1,4 @@
-package com.example
+package com.smithandreah69.beamspot
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

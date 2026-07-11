@@ -1,6 +1,6 @@
 /**
  * BeamSpot API Server
- * Deploy on Render (free tier) — see render.yaml for one-click setup
+ * Optimized for deployment on Railway (production tier)
  */
 
 require('dotenv').config();
@@ -23,7 +23,7 @@ const db = new Pool({
 });
 
 // ─── Google OAuth client ──────────────────────────────────────────────────
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const googleClient = new OAuth2Client(process.env.GOOGLE_WEB_CLIENT_ID);
 
 // ─── Middleware ───────────────────────────────────────────────────────────
 app.use(helmet());
@@ -61,7 +61,7 @@ app.post('/api/auth/google', authLimit, async (req, res) => {
     try {
         const ticket = await googleClient.verifyIdToken({
             idToken,
-            audience: process.env.GOOGLE_CLIENT_ID
+            audience: process.env.GOOGLE_WEB_CLIENT_ID
         });
         const payload = ticket.getPayload();
         const googleId   = payload.sub;
@@ -234,9 +234,74 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
         [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout]
     )).rows[0];
 
-    // TODO: Create Flutterwave checkout and return checkout_url
-    // const charge = await flutterwave.charge({ sessionId: session.id, amount: amountTotal, phone, method: paymentMethod });
-    res.json({ sessionId: session.id, amountTotal, platformFee, hostPayout /* checkoutUrl: charge.link */ });
+    // Create Flutterwave checkout and return checkoutUrl
+    let checkoutUrl = null;
+    try {
+        const response = await fetch('https://api.flutterwave.com/v3/payments', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                tx_ref: `beamspot-sess-${session.id}`,
+                amount: amountTotal.toString(),
+                currency: process.env.FLUTTERWAVE_CURRENCY || 'KES',
+                redirect_url: `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/api/sessions/callback`,
+                meta: {
+                    session_id: session.id
+                },
+                customer: {
+                    email: req.body.email || 'guest@beamspot.com',
+                    phonenumber: phone || '',
+                    name: 'BeamSpot Guest'
+                },
+                customizations: {
+                    title: 'BeamSpot Wi-Fi',
+                    description: `Payment for ${durationMin} minutes of high-speed Wi-Fi access`
+                }
+            })
+        });
+
+        const data = await response.json();
+        if (data.status === 'success' && data.data && data.data.link) {
+            checkoutUrl = data.data.link;
+        } else {
+            console.error('Flutterwave API response error:', data);
+        }
+    } catch (e) {
+        console.error('Flutterwave payment initiation failed:', e.message);
+    }
+
+    res.json({ sessionId: session.id, amountTotal, platformFee, hostPayout, checkoutUrl });
+});
+
+// GET route for Flutterwave redirect callback
+app.get('/api/sessions/callback', async (req, res) => {
+    const { status, tx_ref } = req.query;
+    res.send(`
+        <html>
+            <head>
+                <title>BeamSpot Payment Callback</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body { background: #0E1614; color: #F0EEE6; font-family: sans-serif; text-align: center; padding: 40px 20px; }
+                    .card { background: #1A2925; padding: 30px; border-radius: 20px; max-width: 400px; margin: 0 auto; border: 1px solid #3FE0C5; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+                    h2 { color: #3FE0C5; margin-top: 0; }
+                    p { color: #9EF0EEE6; font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
+                    .btn { display: inline-block; background: #FF7A45; color: #F0EEE6; padding: 12px 24px; text-decoration: none; border-radius: 10px; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>Payment Processed</h2>
+                    <p>Status: <strong>${status === 'successful' ? 'SUCCESSFUL' : 'PENDING / FAILED'}</strong></p>
+                    <p>You can now return to the BeamSpot app or browser tab to start using high-speed internet.</p>
+                    <a href="javascript:window.close()" class="btn">Close Window</a>
+                </div>
+            </body>
+        </html>
+    `);
 });
 
 // Poll session status (guest browser polls this every 3 seconds after paying)
