@@ -57,7 +57,8 @@ data class CreateSessionRequest(
     val guestDeviceId: String,
     val durationMin: Int,
     val paymentMethod: String,
-    val phone: String
+    val phone: String,
+    val guestIp: String? = null
 )
 
 data class CreateSessionResponse(
@@ -71,6 +72,14 @@ data class CreateSessionResponse(
 data class SessionStatusResponse(
     val status: String,
     val expiresAt: String?
+)
+
+data class PendingSessionResponse(
+    val sessionId: Int,
+    val guestIp: String?,
+    val guestDeviceId: String,
+    val durationMin: Int,
+    val status: String
 )
 
 data class HostStatsResponse(
@@ -97,6 +106,9 @@ interface ApiService {
 
     @GET("api/hosts/stats")
     suspend fun getHostStats(): HostStatsResponse
+
+    @GET("api/hosts/sessions/pending")
+    suspend fun getPendingSessions(): List<PendingSessionResponse>
 }
 
 // ─── Retrofit Client Singleton ────────────────────────────────────────────

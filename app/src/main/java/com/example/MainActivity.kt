@@ -118,7 +118,9 @@ class AppViewModel : ViewModel() {
             distanceMeters = stats.distanceMeters
             connectedSsid  = stats.ssid
 
-            if (RetrofitClient.getToken() != null) {
+            if (BeamSpotVpnService.isRunning) {
+                guestCount = BeamSpotVpnService.activeLocalClientsCount
+            } else if (RetrofitClient.getToken() != null) {
                 try {
                     val hostStats = RetrofitClient.apiService.getHostStats()
                     guestCount = hostStats.activeGuests
@@ -742,7 +744,8 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
     var showPass  by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
     var connectError by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val wifiConnectHelper = remember { WifiConnectHelper(context) }
 
     Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
         TopBar("Enter WiFi password") { nav.popBackStack() }
@@ -787,15 +790,18 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
         BeamButton(if (isConnecting) "Connecting…" else "Connect & Create BeamSpot Network →", Cyan, enabled = password.isNotBlank() && !isConnecting) {
             isConnecting = true
             connectError = ""
-            scope.launch {
-                // Real connection attempt happens at the OS level via NetworkRequest
-                // If the password is wrong, Android will report failure via the callback
-                // We simulate the connecting state and then proceed to permissions
-                delay(1500) // replace with real WifiNetworkSpecifier connection attempt
-                isConnecting = false
-                // On real success: navigate to permissions
-                nav.navigate(Route.SB_PERMISSIONS)
-            }
+            wifiConnectHelper.connect(
+                ssid = decodedSsid,
+                password = password,
+                onSuccess = {
+                    isConnecting = false
+                    nav.navigate(Route.SB_PERMISSIONS)
+                },
+                onFailure = { errorMsg ->
+                    isConnecting = false
+                    connectError = errorMsg
+                }
+            )
         }
     }
 }
@@ -1030,15 +1036,51 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
         }
 
         // Network name being broadcast
-        if (vm.beamSpotNetworkName.isNotEmpty()) {
+        val isHotspotRunning = BeamSpotVpnService.isRunning && BeamSpotVpnService.actualHotspotSsid.isNotEmpty()
+        if (isHotspotRunning || vm.beamSpotNetworkName.isNotEmpty()) {
+            val displaySsid = if (isHotspotRunning) BeamSpotVpnService.actualHotspotSsid else vm.beamSpotNetworkName
+            val displayPass = if (isHotspotRunning) BeamSpotVpnService.actualHotspotPassword else ""
+
             Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(12.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text("Broadcasting as", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                        Text(vm.beamSpotNetworkName, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Column(Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Broadcasting Hotspot SSID", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                            Text(displaySsid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
                     }
+                    if (displayPass.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Lock, null, tint = Cyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("Hotspot Password (WPA2)", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text(displayPass, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = BorderLine)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (isHotspotRunning) 
+                            "Dual-Role STA+AP: ${if (BeamSpotVpnService.isStaApSupported) "Supported ✅ (Sharing upstream WiFi)" else "Limited ⚠️ (Sharing mobile data)"}"
+                        else 
+                            "Dual-Role STA+AP: Checking support...", 
+                        color = if (BeamSpotVpnService.isStaApSupported) Cyan else Amber, 
+                        fontSize = 11.sp, 
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Active Capacity: ${BeamSpotVpnService.activeLocalClientsCount} / ${BeamSpotVpnService.MAX_GUESTS} guests",
+                        color = PaperDim,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -1722,7 +1764,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                     Spacer(Modifier.width(8.dp))
                                     Column {
                                         Text("Active Bridge Network", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                                        Text(selectedSpot?.ssid ?: "Jane_BeamSpot", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Text(selectedSpot?.ssid ?: "BeamSpot Network", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                     }
                                 }
                             }
@@ -1853,13 +1895,28 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                         isProcessingPayment = true
                                         scope.launch {
                                             try {
+                                                val wifiManager = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                                                val ipVal = wifiManager?.connectionInfo?.ipAddress ?: 0
+                                                val localIp = if (ipVal != 0) {
+                                                    String.format(
+                                                        java.util.Locale.US,
+                                                        "%d.%d.%d.%d",
+                                                        ipVal and 0xff,
+                                                        (ipVal ushr 8) and 0xff,
+                                                        (ipVal ushr 16) and 0xff,
+                                                        (ipVal ushr 24) and 0xff
+                                                    )
+                                                } else null
+
                                                 val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "android-device-id"
+                                                val compositeDeviceId = if (localIp != null) "$deviceId|$localIp" else deviceId
                                                 val sessionReq = CreateSessionRequest(
                                                     listingId = selectedSpot!!.listingId,
-                                                    guestDeviceId = deviceId,
+                                                    guestDeviceId = compositeDeviceId,
                                                     durationMin = selectedPackageMins,
                                                     paymentMethod = "mpesa",
-                                                    phone = mpesaPhone
+                                                    phone = mpesaPhone,
+                                                    guestIp = localIp
                                                 )
                                                 val sessionResp = RetrofitClient.apiService.createSession(sessionReq)
                                                 
