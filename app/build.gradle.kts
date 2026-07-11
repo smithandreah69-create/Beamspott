@@ -21,6 +21,9 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID") ?: "YOUR_WEB_CLIENT_ID_HERE"
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
+    buildConfigField("String", "API_BASE_URL", "\"https://your-backend.railway.app\"")
   }
 
   signingConfigs {
@@ -86,11 +89,14 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
-  // implementation(libs.androidx.datastore.preferences)
+  implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
-  // implementation(libs.androidx.navigation.compose)
+  implementation(libs.androidx.navigation.compose)
+  implementation("androidx.core:core-splashscreen:1.0.1")
+  implementation("com.google.android.gms:play-services-auth:21.2.0")
+  implementation("org.json:json:20240303")
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)

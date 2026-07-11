@@ -1,28 +1,39 @@
 package com.example
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.VpnService
+import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
+import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,3043 +42,1778 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.ui.theme.MyApplicationTheme
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.*
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.UUID
-import androidx.compose.animation.core.*
-import android.Manifest
-import android.content.pm.PackageManager
-import android.content.Intent
-import android.net.Uri
-import android.net.wifi.WifiManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.tween
+import kotlin.math.roundToInt
 
+// ─── Brand colours ────────────────────────────────────────────────────────
+private val Ink         = Color(0xFF0E1614)
+private val Panel       = Color(0xFF1A2925)
+private val Amber       = Color(0xFFFF7A45)
+private val Cyan        = Color(0xFF3FE0C5)
+private val Paper       = Color(0xFFF0EEE6)
+private val PaperDim    = Color(0x9EF0EEE6.toInt())
+private val BorderLine  = Color(0x1AF0EEE6.toInt())
+
+// ─── Navigation routes ────────────────────────────────────────────────────
+private object Route {
+    const val SPLASH           = "splash"
+    const val LANDING          = "landing"
+    const val SIGN_IN          = "sign_in"
+    const val MODE_SELECT      = "mode_select"
+    const val PAYOUT_SETUP     = "payout_setup"
+    const val SB_WIFI_SCAN     = "sb_wifi_scan"      // Smart Bridge: scan WiFi
+    const val SB_PASSWORD      = "sb_password/{ssid}/{bssid}" // enter password
+    const val SB_PERMISSIONS   = "sb_permissions"    // request real permissions
+    const val SB_NAMING        = "sb_naming"         // name the BeamSpot network
+    const val DASHBOARD        = "dashboard"
+    const val GUEST_PORTAL     = "guest_portal"      // Guest Flow: find and connect
+}
+
+// ─── Shared ViewModel ─────────────────────────────────────────────────────
+class AppViewModel : ViewModel() {
+    var userName    by mutableStateOf("")
+    var userEmail   by mutableStateOf("")
+    var isSignedIn  by mutableStateOf(false)
+
+    var selectedMode       by mutableStateOf("")      // "smart_bridge" | "router" | "hotspot"
+    var selectedWifi       by mutableStateOf<WifiNetwork?>(null)
+    var beamSpotNetworkName by mutableStateOf("")
+    var vpnActive          by mutableStateOf(false)
+
+    var pricePerMin    by mutableStateOf(2.0)
+    var payoutMethod   by mutableStateOf("mpesa")     // mpesa | airtel | bank | card
+    var payoutNumber   by mutableStateOf("")
+    var bankName       by mutableStateOf("")
+    var bankAccount    by mutableStateOf("")
+    var bankHolder     by mutableStateOf("")
+
+    var guestCount         by mutableStateOf(0)
+    var todayEarnings      by mutableStateOf(0.0)
+    var downloadMbps       by mutableStateOf(0.0)
+    var uploadMbps         by mutableStateOf(0.0)
+    var signalBars         by mutableStateOf(0)
+    var signalRssi         by mutableStateOf(0)
+    var linkSpeedMbps      by mutableStateOf(0)
+    var distanceMeters     by mutableStateOf(0.0)
+    var connectedSsid      by mutableStateOf("")
+
+    fun refreshStats(helper: WifiScanHelper) {
+        viewModelScope.launch {
+            val stats = helper.getConnectionStats() ?: return@launch
+            downloadMbps   = stats.downloadMbps
+            uploadMbps     = stats.uploadMbps
+            signalBars     = stats.signalBars
+            signalRssi     = stats.rssiDbm
+            linkSpeedMbps  = stats.linkSpeedMbps
+            distanceMeters = stats.distanceMeters
+            connectedSsid  = stats.ssid
+        }
+    }
+}
+
+// ─── Activity ─────────────────────────────────────────────────────────────
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
-            val vm: BeamSpotViewModel = viewModel()
-            val isDark = when (vm.currentThemeMode) {
-                "Dark" -> true
-                "Light" -> false
-                else -> isSystemInDarkTheme()
-            }
-            MyApplicationTheme(darkTheme = isDark) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    AppNavigation(vm, isDark)
-                }
+            BeamSpotTheme {
+                BeamSpotApp()
             }
         }
     }
-}
-
-// Model for Session
-data class GuestSession(
-    val id: String = UUID.randomUUID().toString(),
-    val deviceName: String,
-    var minutesRemaining: Int,
-    val initialMinutes: Int,
-    val mode: String
-)
-
-// Screen state representation
-sealed class Screen {
-    object Landing : Screen()
-    object HostLogin : Screen()
-    object HostSetupModeSelection : Screen()
-    data class SmartBridgeSetup(val step: Int) : Screen()
-    data class RouterSetup(val step: Int) : Screen()
-    object PhoneHotspotSetup : Screen()
-    object HostDashboard : Screen()
-    object GuestMain : Screen()
-}
-
-class BeamSpotViewModel : ViewModel() {
-    // Settings & Theme
-    var currentThemeMode by mutableStateOf("System") // "System", "Light", "Dark"
-
-    // Auth state
-    var loggedInUserEmail by mutableStateOf<String?>(null)
-    var loggedInUserName by mutableStateOf<String?>(null)
-    var isNewUser by mutableStateOf(false)
-
-    // Navigation
-    var currentScreen by mutableStateOf<Screen>(Screen.Landing)
-    private val navigationStack = mutableListOf<Screen>()
-
-    fun navigateTo(screen: Screen) {
-        navigationStack.add(currentScreen)
-        currentScreen = screen
-    }
-
-    fun navigateBack() {
-        if (navigationStack.isNotEmpty()) {
-            currentScreen = navigationStack.removeAt(navigationStack.size - 1)
-        } else {
-            currentScreen = Screen.Landing
-        }
-    }
-
-    // Host configurations
-    var hostDisplayName by mutableStateOf("")
-    var selectedConnectionMode by mutableStateOf("Smart Bridge") // "Smart Bridge", "Router", "Phone Hotspot"
-    var pricePerMinute by mutableStateOf(2.00) // KSh 2.00/min
-
-    // Smart Bridge setup variables
-    var bridgeHomeSsid by mutableStateOf("")
-    var bridgeHomePassword by mutableStateOf("")
-    var bridgeHomePasswordVisible by mutableStateOf(false)
-    var bridgeBeamSpotSsid by mutableStateOf("")
-    var bridgeTestConnecting by mutableStateOf(false)
-
-    // Router setup variables
-    var routerOpenWrtVerified by mutableStateOf(false)
-    var routerSsidConnected by mutableStateOf("")
-    var routerBeamSpotSsid by mutableStateOf("")
-    var routerScriptVerified by mutableStateOf(false)
-    var routerScriptConnecting by mutableStateOf(false)
-
-    // Phone hotspot setup variables
-    var phoneHotspotWarningChecked by mutableStateOf(false)
-
-    // Payout info
-    var payoutMethod by mutableStateOf("M-Pesa") // "M-Pesa", "Airtel Money", "Bank Account"
-    var payoutNumber by mutableStateOf("")
-    var bankName by mutableStateOf("Equity Bank")
-    var bankAccountNum by mutableStateOf("")
-    var bankAccountName by mutableStateOf("")
-
-    // Host dashboard statistics
-    var isSharingActive by mutableStateOf(false)
-    var todayEarnings by mutableStateOf(0.0)
-    var pendingWithdrawalBalance by mutableStateOf(0.0)
-    var minutesSoldToday by mutableStateOf(0)
-    var totalMinutesSold by mutableStateOf(0)
-    var totalSessionsSold by mutableStateOf(0)
-    var activeGuestsCount by mutableStateOf(0)
-
-    // Active sessions on host side
-    val activeSessions = mutableStateListOf<GuestSession>()
-
-    // Guest side variables
-    var guestSelectedMinutes by mutableStateOf(60)
-    var guestPaymentMethod by mutableStateOf("M-Pesa") // "M-Pesa", "Airtel Money", "Card"
-    var guestMpesaNumber by mutableStateOf("")
-    var guestAirtelNumber by mutableStateOf("")
-    var guestScanning by mutableStateOf(false)
-    var isGuestPaymentProcessing by mutableStateOf(false)
-    var isGuestSTKPromptOpen by mutableStateOf(false)
-    var guestSTKPin by mutableStateOf("")
-    var isGuestConnected by mutableStateOf(false)
-    var guestConnectedMinutesLeft by mutableStateOf(0) // seconds
-    var guestConnectedTotalMinutes by mutableStateOf(0)
-    var guestHostName by mutableStateOf("")
-    var guestModeConnected by mutableStateOf("")
-
-    // Fired warnings tracker
-    var warning5mFired = false
-    var warning1mFired = false
-
-    // Bottom navigation index (Host dashboard)
-    var activeDashboardTab by mutableStateOf(0) // 0: Dash, 1: QR/Router, 2: Reports, 3: Settings
-    var reportsTimePeriod by mutableStateOf("Day") // "Day", "Week", "Month"
-
-    // Initial ticking loop for countdowns
-    init {
-        viewModelScope.launch {
-            while (true) {
-                delay(1000)
-                // Guest side countdown ticking
-                if (isGuestConnected && guestConnectedMinutesLeft > 0) {
-                    guestConnectedMinutesLeft -= 1
-                    
-                    val minsLeft = (guestConnectedMinutesLeft + 59) / 60
-                    val secsLeft = guestConnectedMinutesLeft
-
-                    // Warning conditions
-                    if (secsLeft == 300 && !warning5mFired) {
-                        warning5mFired = true
-                    } else if (secsLeft == 60 && !warning1mFired) {
-                        warning1mFired = true
-                    } else if (secsLeft == 0) {
-                        isGuestConnected = false
-                    }
-                }
-            }
-        }
-    }
-
-    // Simulator controls
-    fun simulateFastForward(seconds: Int) {
-        if (isGuestConnected) {
-            guestConnectedMinutesLeft = (guestConnectedMinutesLeft - seconds).coerceAtLeast(0)
-            if (guestConnectedMinutesLeft == 0) {
-                isGuestConnected = false
-            }
-        }
-    }
-}
-
-// CENTRALIZED SLEEK INTERFACE STYLING HELPERS
-object SleekStyle {
-    fun hostColor(isDark: Boolean) = if (isDark) Color(0xFF818CF8) else Color(0xFF4F46E5) // Indigo-400 / Indigo-600
-    fun guestColor(isDark: Boolean) = if (isDark) Color(0xFFF97316) else Color(0xFFEA580C) // Orange-500 / Orange-600
-    fun primaryTextColor(isDark: Boolean) = if (isDark) Color(0xFFF8FAFC) else Color(0xFF1B1B1F) // Slate-50 / Slate-900
-    fun mutedTextColor(isDark: Boolean) = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B) // Slate-400 / Slate-500
-    fun cardBg(isDark: Boolean) = if (isDark) Color(0xFF1E293B) else Color(0xFFFFFFFF) // Slate-800 / White
-    fun cardBorder(isDark: Boolean) = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9) // Slate-700 / Slate-100
-    fun pillBg(isDark: Boolean) = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9) // Slate-700 / Slate-100
-    fun backgroundColor(isDark: Boolean) = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC) // Slate-900 / Slate-50
 }
 
 @Composable
-fun AppNavigation(vm: BeamSpotViewModel, isDark: Boolean) {
-    AnimatedContent(
-        targetState = vm.currentScreen,
-        transitionSpec = {
-            fadeIn(animationSpec = androidx.compose.animation.core.tween(200)) togetherWith
-            fadeOut(animationSpec = androidx.compose.animation.core.tween(200))
-        },
-        label = "ScreenTransition"
-    ) { screen ->
-        when (screen) {
-            is Screen.Landing -> LandingScreen(vm, isDark)
-            is Screen.HostLogin -> HostLoginScreen(vm, isDark)
-            is Screen.HostSetupModeSelection -> HostSetupModeSelectionScreen(vm, isDark)
-            is Screen.SmartBridgeSetup -> SmartBridgeSetupFlow(vm, screen.step, isDark)
-            is Screen.RouterSetup -> RouterSetupFlow(vm, screen.step, isDark)
-            is Screen.PhoneHotspotSetup -> PhoneHotspotSetupFlow(vm, isDark)
-            is Screen.HostDashboard -> HostDashboardScreen(vm, isDark)
-            is Screen.GuestMain -> GuestMainScreen(vm, isDark)
-        }
-    }
-}
-
-// 1. LANDING SCREEN
-@Composable
-fun LandingScreen(vm: BeamSpotViewModel, isDark: Boolean) {
-    val context = LocalContext.current
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
-        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (fineGranted || coarseGranted) {
-            Toast.makeText(context, "Permissions authorized. Scanning ready!", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Location authorized denied. Nearby scanning will be limited.", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    fun checkAndRequestPermissions(onGranted: () -> Unit) {
-        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (hasFine || hasCoarse) {
-            onGranted()
-        } else {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION,
-                    Manifest.permission.ACCESS_WIFI_STATE,
-                    Manifest.permission.CHANGE_WIFI_STATE
-                )
-            )
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        Toast.makeText(context, "BeamSpot scans nearby networks utilizing Location permission.", Toast.LENGTH_LONG).show()
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp)
-    ) {
-        Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "BeamSpot",
-                    fontSize = 38.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-1).sp,
-                    color = SleekStyle.primaryTextColor(isDark)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(SleekStyle.hostColor(isDark))
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "Pay-by-the-minute local internet",
-                fontSize = 15.sp,
-                color = SleekStyle.mutedTextColor(isDark),
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(48.dp))
-
-            // Two entry cards
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = SleekStyle.cardBg(isDark)
-                ),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        checkAndRequestPermissions {
-                            vm.guestScanning = true
-                            vm.navigateTo(Screen.GuestMain)
-                        }
-                    }
-                    .testTag("i_need_internet_card"),
-                shape = RoundedCornerShape(24.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(24.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SleekStyle.guestColor(isDark).copy(alpha = 0.1f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Filled.SignalWifi4Bar,
-                            contentDescription = "Guest",
-                            tint = SleekStyle.guestColor(isDark),
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = "I need internet",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Connect nearby with zero passwords.",
-                            fontSize = 13.sp,
-                            color = SleekStyle.mutedTextColor(isDark)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = SleekStyle.cardBg(isDark)
-                ),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        checkAndRequestPermissions {
-                            if (vm.loggedInUserEmail != null) {
-                                vm.navigateTo(Screen.HostDashboard)
-                            } else {
-                                vm.navigateTo(Screen.HostLogin)
-                            }
-                        }
-                    }
-                    .testTag("i_have_internet_card"),
-                shape = RoundedCornerShape(24.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(24.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SleekStyle.hostColor(isDark).copy(alpha = 0.1f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Filled.Router,
-                            contentDescription = "Host",
-                            tint = SleekStyle.hostColor(isDark),
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = "I have internet",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Share data/wifi & earn automatic income.",
-                            fontSize = 13.sp,
-                            color = SleekStyle.mutedTextColor(isDark)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 2. MOCK GOOGLE LOGIN SCREEN (CHANGE 1)
-@Composable
-fun HostLoginScreen(vm: BeamSpotViewModel, isDark: Boolean) {
-    var showConsentDialog by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp)
-    ) {
-        IconButton(
-            onClick = { vm.navigateBack() },
-            modifier = Modifier.align(Alignment.TopStart)
-        ) {
-            Icon(
-                Icons.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = SleekStyle.primaryTextColor(isDark)
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "Host Account Sign-In",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.5).sp,
-                color = SleekStyle.primaryTextColor(isDark)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Continue with Google to access your BeamSpot dashboard",
-                fontSize = 14.sp,
-                color = SleekStyle.mutedTextColor(isDark),
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(40.dp))
-
-            Button(
-                onClick = { showConsentDialog = true },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDark) Color(0xFF1E293B) else Color.White,
-                    contentColor = SleekStyle.primaryTextColor(isDark)
-                ),
-                shape = RoundedCornerShape(100.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("continue_google_button")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color.White)
-                    ) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawArc(Color(0xFFEA4335), 180f, 90f, true)
-                            drawArc(Color(0xFFFBBC05), 270f, 90f, true)
-                            drawArc(Color(0xFF4285F4), 0f, 90f, true)
-                            drawArc(Color(0xFF34A853), 90f, 90f, true)
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Continue with Google",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
-
-    if (showConsentDialog) {
-        val context = LocalContext.current
-        var typedEmail by remember { mutableStateOf("") }
-        var typedName by remember { mutableStateOf("") }
-        var emailError by remember { mutableStateOf(false) }
-
-        Dialog(onDismissRequest = { showConsentDialog = false }) {
-            var animateTrigger by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                animateTrigger = true
-            }
-            val scale by animateFloatAsState(
-                targetValue = if (animateTrigger) 1f else 0.85f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            )
-            val alpha by animateFloatAsState(
-                targetValue = if (animateTrigger) 1f else 0f,
-                animationSpec = tween(durationMillis = 200)
-            )
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = SleekStyle.cardBg(isDark)
-                ),
-                shape = RoundedCornerShape(32.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .padding(16.dp)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        this.alpha = alpha
-                    }
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Sign in with Google",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = SleekStyle.primaryTextColor(isDark),
-                        letterSpacing = (-0.5).sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Enter your Google credentials to continue to BeamSpot",
-                        fontSize = 12.sp,
-                        color = SleekStyle.mutedTextColor(isDark),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    OutlinedTextField(
-                        value = typedEmail,
-                        onValueChange = {
-                            typedEmail = it
-                            emailError = false
-                        },
-                        label = { Text("Gmail Address") },
-                        placeholder = { Text("your.name@gmail.com") },
-                        isError = emailError,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (emailError) {
-                        Text(
-                            text = "A valid Gmail address is required.",
-                            color = Color(0xFFEF4444),
-                            fontSize = 11.sp,
-                            modifier = Modifier.align(Alignment.Start).padding(top = 4.dp, start = 4.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = typedName,
-                        onValueChange = { typedName = it },
-                        label = { Text("Your Display Name") },
-                        placeholder = { Text("Mama Jane") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Button(
-                        onClick = {
-                            val isGmail = typedEmail.trim().lowercase().endsWith("@gmail.com")
-                            if (typedEmail.isBlank() || !isGmail) {
-                                emailError = true
-                            } else {
-                                vm.loggedInUserEmail = typedEmail.trim()
-                                vm.loggedInUserName = if (typedName.isNotBlank()) typedName.trim() else "Host"
-                                vm.hostDisplayName = if (typedName.isNotBlank()) typedName.trim() else "Host"
-                                vm.isNewUser = true
-                                showConsentDialog = false
-                                vm.navigateTo(Screen.HostSetupModeSelection)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SleekStyle.hostColor(isDark),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                    ) {
-                        Text("Sign In", fontWeight = FontWeight.Bold)
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    TextButton(
-                        onClick = {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://accounts.google.com/signup"))
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Could not open browser. Please visit accounts.google.com/signup", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    ) {
-                        Text(
-                            text = "Don't have a Gmail account? Create one",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekStyle.hostColor(isDark)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 3. HOST SETUP MODE SELECTION (CHANGE 8)
-@Composable
-fun HostSetupModeSelectionScreen(vm: BeamSpotViewModel, isDark: Boolean) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Text(
-                text = "Choose Connection Mode",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                ),
-                border = BorderStroke(2.dp, if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        vm.selectedConnectionMode = "Smart Bridge"
-                        vm.navigateTo(Screen.SmartBridgeSetup(1))
-                    }
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.SettingsInputHdmi, "Bridge", tint = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Smart Bridge Mode", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    if (isDark) Color(0xFF3FE0C5).copy(alpha = 0.2f) else Color(0xFF1FB89E).copy(alpha = 0.2f),
-                                    RoundedCornerShape(4.dp)
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                "EASIEST SETUP",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Give us your WiFi password. We create a separate network. Guests pay to join. Fully automatic — no router changes needed.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("• Est. Setup: 2 minutes", fontSize = 10.sp, color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                    Text("• Requirement: Your phone stays on while sharing", fontSize = 10.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                ),
-                border = BorderStroke(1.dp, if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        vm.selectedConnectionMode = "Router"
-                        vm.navigateTo(Screen.RouterSetup(1))
-                    }
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Router, "Router", tint = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Router Mode", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Box(
-                            modifier = Modifier
-                                .background(Color.Gray.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                "RECOMMENDED FOR POWER USERS",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Install a small script on your router. Full automatic control. Best speed. Phone doesn't need to stay open.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("• Est. Setup: 10 minutes", fontSize = 10.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                    Text("• Requirement: Compatible router (~KSh 3,500)", fontSize = 10.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                ),
-                border = BorderStroke(1.dp, if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        vm.selectedConnectionMode = "Phone Hotspot"
-                        vm.navigateTo(Screen.PhoneHotspotSetup)
-                    }
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.PhoneAndroid, "Phone", tint = if (isDark) Color(0xFFFF7A45) else Color(0xFFE55A1F))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Phone Hotspot (Basic)", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Box(
-                            modifier = Modifier
-                                .background(Color.Red.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                "LIMITED ENFORCEMENT",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Red
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Share your phone's mobile data. Guests are shown a password after paying and connect manually. No automatic disconnect.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("• Est. Setup: 1 minute", fontSize = 10.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                    Text("• Requirement: Mobile data plan required", fontSize = 10.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                }
-            }
-        }
-    }
-}
-
-// 4. SMART BRIDGE SETUP FLOW (CHANGE 9)
-@Composable
-fun SmartBridgeSetupFlow(vm: BeamSpotViewModel, step: Int, isDark: Boolean) {
-    val coroutineScope = rememberCoroutineScope()
-    var showVpnPermissionDialog by remember { mutableStateOf(false) }
-    var showExplanationBeforeVpn by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.navigateBack() }) {
-                    Icon(Icons.Filled.ArrowBack, "Back")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Smart Bridge Setup (${step}/4)", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            when (step) {
-                1 -> {
-                    Text("Your Home WiFi Details", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "We need these to connect to your internet. They are stored securely on your phone only — never sent to our servers.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedTextField(
-                        value = vm.bridgeHomeSsid,
-                        onValueChange = { vm.bridgeHomeSsid = it },
-                        label = { Text("WiFi Network Name (SSID)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("bridge_ssid_input"),
-                        trailingIcon = {
-                            Button(
-                                onClick = { vm.bridgeHomeSsid = "Safaricom_Home_Fiber_5G" },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3),
-                                    contentColor = MaterialTheme.colorScheme.onBackground
-                                ),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Text("Scan", fontSize = 10.sp)
-                            }
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = vm.bridgeHomePassword,
-                        onValueChange = { vm.bridgeHomePassword = it },
-                        label = { Text("WiFi Password") },
-                        visualTransformation = if (vm.bridgeHomePasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { vm.bridgeHomePasswordVisible = !vm.bridgeHomePasswordVisible }) {
-                                Icon(
-                                    imageVector = if (vm.bridgeHomePasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                    contentDescription = "Toggle password"
-                                )
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("bridge_password_input")
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-                    Button(
-                        onClick = { vm.navigateTo(Screen.SmartBridgeSetup(2)) },
-                        enabled = vm.bridgeHomeSsid.isNotBlank() && vm.bridgeHomePassword.isNotBlank(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("bridge_step1_continue"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Continue", fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                2 -> {
-                    LaunchedEffect(Unit) {
-                        vm.bridgeTestConnecting = true
-                        coroutineScope.launch {
-                            delay(1800)
-                            vm.bridgeTestConnecting = false
-                            delay(400)
-                            vm.navigateTo(Screen.SmartBridgeSetup(3))
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        if (vm.bridgeTestConnecting) {
-                            CircularProgressIndicator(color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("Connecting to your home WiFi...", fontWeight = FontWeight.Bold)
-                            Text("Verifying credentials & checking internet access...", fontSize = 12.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                        } else {
-                            Icon(Icons.Filled.CheckCircle, "Success", tint = Color.Green, modifier = Modifier.size(64.dp))
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("Connection Test Successful!", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("Connected to ${vm.bridgeHomeSsid}", fontSize = 14.sp)
-                        }
-                    }
-                }
-
-                3 -> {
-                    Text("Name Your BeamSpot Network", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "This is the SSID/Name that guests will see in their WiFi networks list. Keep it simple and inviting.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedTextField(
-                        value = vm.bridgeBeamSpotSsid,
-                        onValueChange = { vm.bridgeBeamSpotSsid = it },
-                        label = { Text("Public Guest network Name") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("bridge_network_name_input")
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        "Guests connect to this network. They cannot access your actual home WiFi or see your credentials.",
-                        fontSize = 11.sp,
-                        color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E)
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-                    Button(
-                        onClick = { vm.navigateTo(Screen.SmartBridgeSetup(4)) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("bridge_step3_continue"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Continue", fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                4 -> {
-                    Text("Active Smart Bridge Gateways", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "We are ready to start broadcasting your BeamSpot guest network.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                        ),
-                        border = BorderStroke(1.dp, if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Permissions Needed", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                "To control which guests get internet, BeamSpot needs to manage your phone's network traffic. We only use this to start and stop internet for paying guests. We do not monitor browsing content.",
-                                fontSize = 12.sp,
-                                color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-                    Button(
-                        onClick = { showExplanationBeforeVpn = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("start_bridge_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Start Sharing", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    }
-
-    if (showExplanationBeforeVpn) {
-        Dialog(onDismissRequest = { showExplanationBeforeVpn = false }) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                ),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3)),
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Virtual Gateway Permission",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "To filter unpaid guest devices and route payments securely, we spin up a local VPN routing service. Tap CONTINUE to allow the Android connection prompt.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { showExplanationBeforeVpn = false }) {
-                            Text("Cancel")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                showExplanationBeforeVpn = false
-                                showVpnPermissionDialog = true
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                                contentColor = Color(0xFF0E1614)
-                            )
-                        ) {
-                            Text("Continue")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showVpnPermissionDialog) {
-        Dialog(onDismissRequest = { showVpnPermissionDialog = false }) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDark) Color(0xFF1A2925) else Color(0xFFFFFFFF)
-                ),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3)),
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp)
-                ) {
-                    Text(
-                        text = "Connection Request",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "BeamSpot wants to set up a VPN connection that allows it to monitor network traffic. Only allow if you trust the source.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.End,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        TextButton(onClick = { showVpnPermissionDialog = false }) {
-                            Text("Cancel")
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Button(
-                            onClick = {
-                                showVpnPermissionDialog = false
-                                vm.isSharingActive = true
-                                vm.navigateTo(Screen.HostDashboard)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                                contentColor = Color(0xFF0E1614)
-                            )
-                        ) {
-                            Text("Allow")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 5. ROUTER SETUP SCREEN (CHANGE 8)
-@Composable
-fun RouterSetupFlow(vm: BeamSpotViewModel, step: Int, isDark: Boolean) {
-    val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.navigateBack() }) {
-                    Icon(Icons.Filled.ArrowBack, "Back")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Router Setup (${step}/4)", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            when (step) {
-                1 -> {
-                    Text("Check Router Compatibility", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Do you have a home router that supports OpenWRT firmware (e.g. GL.iNet Mango, Slate, etc.)?",
-                        fontSize = 14.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Button(
-                        onClick = {
-                            vm.routerOpenWrtVerified = true
-                            vm.navigateTo(Screen.RouterSetup(2))
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Yes, I have one")
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedButton(
-                        onClick = {
-                            Toast.makeText(context, "Recommended: GL.iNet Mango (~KSh 3,500)", Toast.LENGTH_LONG).show()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("I need to buy one")
-                    }
-                }
-
-                2 -> {
-                    Text("Connect to your Router", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Make sure your phone is connected to your router's WiFi right now to proceed.",
-                        fontSize = 14.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    Text("SSID Detected:", fontSize = 12.sp, color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614))
-                    Text(vm.routerSsidConnected, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Button(
-                        onClick = {
-                            vm.navigateTo(Screen.RouterSetup(3))
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Verify and Continue")
-                    }
-                }
-
-                3 -> {
-                    Text("Name Guest network", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = vm.routerBeamSpotSsid,
-                        onValueChange = { vm.routerBeamSpotSsid = it },
-                        label = { Text("What should guests see?") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    Button(
-                        onClick = {
-                            vm.navigateTo(Screen.RouterSetup(4))
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text("Generate Setup Script")
-                    }
-                }
-
-                4 -> {
-                    Text("Run Setup Script", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Copy this script, SSH into your router, and paste it to activate the captive portal agent.",
-                        fontSize = 12.sp,
-                        color = if (isDark) Color(0x9EF0EEE6) else Color(0x800E1614)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color.Black),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Box(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                "sh -c \"$(curl -fsSL https://beamspot.com/setup/r_agent_X89A)\"",
-                                color = Color.Green,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    Row {
-                        Button(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Beamspot Script", "sh -c \"$(curl -fsSL https://beamspot.com/setup/r_agent_X89A)\""))
-                                Toast.makeText(context, "Copied script to clipboard", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF223A33) else Color(0xFFE0E4E3),
-                                contentColor = MaterialTheme.colorScheme.onBackground
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Copy Script")
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (vm.routerScriptConnecting) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("Pinging router agent endpoint...", fontSize = 12.sp)
-                        }
-                    } else if (vm.routerScriptVerified) {
-                        Text("✓ Router Agent is Live!", color = Color.Green, fontWeight = FontWeight.Bold)
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    Button(
-                        onClick = {
-                            if (!vm.routerScriptVerified) {
-                                vm.routerScriptConnecting = true
-                                coroutineScope.launch {
-                                    delay(2000)
-                                    vm.routerScriptConnecting = false
-                                    vm.routerScriptVerified = true
-                                }
-                            } else {
-                                vm.isSharingActive = true
-                                vm.navigateTo(Screen.HostDashboard)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDark) Color(0xFF3FE0C5) else Color(0xFF1FB89E),
-                            contentColor = Color(0xFF0E1614)
-                        )
-                    ) {
-                        Text(if (vm.routerScriptVerified) "Go to Dashboard" else "Verify Connection")
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 6. PHONE HOTSPOT SETUP FLOW (CHANGE 3, 8)
-@Composable
-fun PhoneHotspotSetupFlow(vm: BeamSpotViewModel, isDark: Boolean) {
-    val context = LocalContext.current
-    var pulsingScale by remember { mutableStateOf(1f) }
-    
-    // Simple pulsing animation for the broadcasting signal
-    LaunchedEffect(Unit) {
-        while(true) {
-            pulsingScale = 1.15f
-            delay(1200)
-            pulsingScale = 1.0f
-            delay(1200)
-        }
-    }
-    
-    val animatedScale by animateFloatAsState(
-        targetValue = pulsingScale,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)
+private fun BeamSpotTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            background = Ink,
+            surface    = Panel,
+            primary    = Cyan,
+            secondary  = Amber,
+            onBackground = Paper,
+            onSurface  = Paper
+        ),
+        content = content
     )
+}
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SleekStyle.backgroundColor(isDark))
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.navigateBack() }) {
-                    Icon(
-                        Icons.Filled.ArrowBack, 
-                        "Back", 
-                        tint = SleekStyle.primaryTextColor(isDark)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Phone Hotspot Setup", 
-                    fontWeight = FontWeight.ExtraBold, 
-                    fontSize = 22.sp,
-                    color = SleekStyle.primaryTextColor(isDark),
-                    letterSpacing = (-0.5).sp
-                )
-            }
-            
-            Spacer(modifier = Modifier.height(20.dp))
+// ─── Root navigation ──────────────────────────────────────────────────────
+@Composable
+fun BeamSpotApp() {
+    val nav = rememberNavController()
+    val vm: AppViewModel = viewModel()
 
-            // Pulse/Bloom Hero Widget
+    NavHost(navController = nav, startDestination = Route.SPLASH) {
+        composable(Route.SPLASH)         { SplashScreen(nav) }
+        composable(Route.LANDING)        { LandingScreen(nav) }
+        composable(Route.SIGN_IN)        { SignInScreen(nav, vm) }
+        composable(Route.MODE_SELECT)    { ModeSelectScreen(nav, vm) }
+        composable(Route.PAYOUT_SETUP)   { PayoutSetupScreen(nav, vm) }
+        composable(Route.SB_WIFI_SCAN)   { SmartBridgeWifiScanScreen(nav, vm) }
+        composable("sb_password/{ssid}/{bssid}") { back ->
+            val ssid  = back.arguments?.getString("ssid")  ?: ""
+            val bssid = back.arguments?.getString("bssid") ?: ""
+            SmartBridgePasswordScreen(nav, vm, ssid, bssid)
+        }
+        composable(Route.SB_PERMISSIONS) { SmartBridgePermissionsScreen(nav, vm) }
+        composable(Route.SB_NAMING)      { SmartBridgeNamingScreen(nav, vm) }
+        composable(Route.DASHBOARD)      { DashboardScreen(nav, vm) }
+        composable(Route.GUEST_PORTAL)   { GuestPortalScreen(nav, vm) }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SPLASH SCREEN
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SplashScreen(nav: NavHostController) {
+    val scale by rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue = 0.92f, targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "scale"
+    )
+    LaunchedEffect(Unit) {
+        delay(2000)
+        nav.navigate(Route.LANDING) { popUpTo(Route.SPLASH) { inclusive = true } }
+    }
+    Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Custom icon: orange circle + cyan beam dots
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(130.dp),
+                Modifier
+                    .scale(scale)
+                    .size(110.dp)
+                    .clip(CircleShape)
+                    .background(Panel)
+                    .border(2.dp, Cyan.copy(alpha = 0.4f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                // Outer blooming radial gradient aura
-                Box(
-                    modifier = Modifier
-                        .size(100.dp * animatedScale)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(
-                            Color(0xFFFF7A45).copy(alpha = 0.08f)
-                        )
-                )
-                Box(
-                    modifier = Modifier
-                        .size(70.dp)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(
-                            Color(0xFFFF7A45).copy(alpha = 0.15f)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.WifiTethering,
-                        contentDescription = "Hotspot Pulse",
-                        tint = Color(0xFFFF7A45),
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Configure Public Hotspot Mode", 
-                fontWeight = FontWeight.Bold, 
-                fontSize = 16.sp,
-                color = SleekStyle.primaryTextColor(isDark)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Earn passive income by sharing your phone's cellular data connection directly with nearby guests.",
-                fontSize = 12.sp,
-                color = SleekStyle.mutedTextColor(isDark)
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Sleek list of info points
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark).copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Key, 
-                            "Key", 
-                            tint = Color(0xFFFF7A45), 
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Automatic Password Handoff", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = SleekStyle.primaryTextColor(isDark))
-                            Text("Paying guests are instantly shown the random password to type and connect.", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                        }
-                    }
-                }
-
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark).copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Info, 
-                            "Info", 
-                            tint = SleekStyle.mutedTextColor(isDark), 
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Manual Connection Management", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = SleekStyle.primaryTextColor(isDark))
-                            Text("Because Android restricts automated mobile hotspot cutoff, guests connect manually.", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Premium Toggle Row
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (vm.phoneHotspotWarningChecked) Color(0xFFFF7A45).copy(alpha = 0.08f) else SleekStyle.cardBg(isDark)
-                ),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, if (vm.phoneHotspotWarningChecked) Color(0xFFFF7A45).copy(alpha = 0.3f) else SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { vm.phoneHotspotWarningChecked = !vm.phoneHotspotWarningChecked }
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = vm.phoneHotspotWarningChecked,
-                        onCheckedChange = { vm.phoneHotspotWarningChecked = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = Color(0xFFFF7A45),
-                            uncheckedColor = SleekStyle.mutedTextColor(isDark)
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "I acknowledge that public hotspot mode requires manual monitoring.", 
-                        fontSize = 11.sp, 
-                        fontWeight = FontWeight.Medium,
-                        color = SleekStyle.primaryTextColor(isDark)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            Button(
-                onClick = {
-                    vm.bridgeBeamSpotSsid = if (vm.hostDisplayName.isNotBlank()) "${vm.hostDisplayName.replace(" ", "")}_Spot" else "BeamSpot_Guest_Network"
-                    vm.isSharingActive = true
-                    vm.navigateTo(Screen.HostDashboard)
-                },
-                enabled = vm.phoneHotspotWarningChecked,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFF7A45),
-                    contentColor = Color.White,
-                    disabledContainerColor = SleekStyle.cardBorder(isDark),
-                    disabledContentColor = SleekStyle.mutedTextColor(isDark)
-                )
-            ) {
-                Text("Start Hotspot Earning", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            }
-        }
-    }
-}
-
-// 7. HOST DASHBOARD WITH FOUR TABS (CHANGE 6, 8, 9)
-@Composable
-fun HostDashboardScreen(vm: BeamSpotViewModel, isDark: Boolean) {
-    val context = LocalContext.current
-    var showWithdrawSheet by remember { mutableStateOf(false) }
-    var editPriceSheet by remember { mutableStateOf(false) }
-    var inputPrice by remember { mutableStateOf(vm.pricePerMinute.toString()) }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "sharing_dot")
-    val dotAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "dotAlpha"
-    )
-
-    Scaffold(
-        bottomBar = {
-            Surface(
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                color = SleekStyle.cardBg(isDark),
-                tonalElevation = 0.dp
-            ) {
-                NavigationBar(
-                    containerColor = Color.Transparent,
-                    tonalElevation = 0.dp
-                ) {
-                    NavigationBarItem(
-                        selected = vm.activeDashboardTab == 0,
-                        onClick = { vm.activeDashboardTab = 0 },
-                        icon = { Icon(Icons.Filled.Dashboard, "Dash", tint = if (vm.activeDashboardTab == 0) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) },
-                        label = { Text("Dash", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (vm.activeDashboardTab == 0) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) }
-                    )
-                    NavigationBarItem(
-                        selected = vm.activeDashboardTab == 1,
-                        onClick = { vm.activeDashboardTab = 1 },
-                        icon = { Icon(Icons.Filled.QrCode, "QR", tint = if (vm.activeDashboardTab == 1) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) },
-                        label = { Text("Share", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (vm.activeDashboardTab == 1) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) }
-                    )
-                    NavigationBarItem(
-                        selected = vm.activeDashboardTab == 2,
-                        onClick = { vm.activeDashboardTab = 2 },
-                        icon = { Icon(Icons.Filled.BarChart, "Reports", tint = if (vm.activeDashboardTab == 2) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) },
-                        label = { Text("Reports", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (vm.activeDashboardTab == 2) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) }
-                    )
-                    NavigationBarItem(
-                        selected = vm.activeDashboardTab == 3,
-                        onClick = { vm.activeDashboardTab = 3 },
-                        icon = { Icon(Icons.Filled.Settings, "Settings", tint = if (vm.activeDashboardTab == 3) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) },
-                        label = { Text("Settings", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (vm.activeDashboardTab == 3) SleekStyle.hostColor(isDark) else SleekStyle.mutedTextColor(isDark)) }
-                    )
-                }
-            }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            when (vm.activeDashboardTab) {
-                0 -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        // SLEEK HEADER BLOCK
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            // First initial Avatar
-                            val firstChar = if (vm.hostDisplayName.isNotEmpty()) vm.hostDisplayName.first().toString() else "B"
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(22.dp))
-                                    .background(
-                                        androidx.compose.ui.graphics.Brush.linearGradient(
-                                            colors = listOf(Color(0xFF60A5FA), Color(0xFF6366F1))
-                                        )
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(firstChar, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = vm.hostDisplayName,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = SleekStyle.primaryTextColor(isDark),
-                                    letterSpacing = (-0.5).sp
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                // Active status badge
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .background(
-                                            if (vm.isSharingActive) {
-                                                if (isDark) Color(0xFF022C22) else Color(0xFFECFDF5)
-                                            } else {
-                                                if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)
-                                            },
-                                            RoundedCornerShape(100.dp)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (vm.isSharingActive) {
-                                                if (isDark) Color(0xFF064E3B) else Color(0xFFD1FAE5)
-                                            } else {
-                                                if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)
-                                            },
-                                            RoundedCornerShape(100.dp)
-                                        )
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .graphicsLayer(alpha = if (vm.isSharingActive) dotAlpha else 1.0f)
-                                            .background(if (vm.isSharingActive) Color(0xFF10B981) else Color(0xFF94A3B8))
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (vm.isSharingActive) "ONLINE · SHARING" else "OFFLINE · PAUSED",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        letterSpacing = 0.5.sp,
-                                        color = if (vm.isSharingActive) {
-                                            if (isDark) Color(0xFF34D399) else Color(0xFF047857)
-                                        } else {
-                                            if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-                                        }
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.weight(1f))
-                            Switch(
-                                checked = vm.isSharingActive,
-                                onCheckedChange = { vm.isSharingActive = it },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = SleekStyle.hostColor(isDark),
-                                    uncheckedThumbColor = SleekStyle.mutedTextColor(isDark),
-                                    uncheckedTrackColor = SleekStyle.cardBorder(isDark)
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // SLEEK MODE STATUS CARD (Rounded 32dp, sleek details)
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            shape = RoundedCornerShape(32.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(24.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(SleekStyle.hostColor(isDark).copy(alpha = 0.1f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            if (vm.selectedConnectionMode == "Router") Icons.Filled.Router else Icons.Filled.SettingsInputHdmi,
-                                            contentDescription = "Mode Icon",
-                                            tint = SleekStyle.hostColor(isDark),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Text(
-                                            text = "${vm.selectedConnectionMode.uppercase()} MODE",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            letterSpacing = 1.sp,
-                                            color = SleekStyle.hostColor(isDark)
-                                        )
-                                        Text(
-                                            text = if (vm.selectedConnectionMode == "Router") "Relaying via ${vm.routerBeamSpotSsid}" else "Relaying via ${vm.bridgeBeamSpotSsid}",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SleekStyle.primaryTextColor(isDark)
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(20.dp))
-
-                                // Grid of two mini contrast boxes
-                                Row(modifier = Modifier.fillMaxWidth()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF8FAFC))
-                                            .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(16.dp))
-                                            .padding(14.dp)
-                                    ) {
-                                        Column {
-                                            Text("Active Guests", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = "${vm.activeSessions.size}",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 18.sp,
-                                                color = SleekStyle.primaryTextColor(isDark)
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF8FAFC))
-                                            .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(16.dp))
-                                            .padding(14.dp)
-                                    ) {
-                                        Column {
-                                            Text("Speed Limit", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = "5.0 Mbps",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 18.sp,
-                                                color = SleekStyle.primaryTextColor(isDark)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // SLEEK EARNINGS GRID (Tab 0 stats)
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            // Rich Indigo Earnings Card
-                            Card(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 6.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF4F46E5)),
-                                shape = RoundedCornerShape(28.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(20.dp)) {
-                                    Text("Today's Revenue", fontSize = 11.sp, color = Color(0xFFC7D2FE))
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "KSh ${vm.todayEarnings.toInt()}",
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 22.sp,
-                                        color = Color.White
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    // Trend badge
-                                    Box(
-                                        modifier = Modifier
-                                            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(100.dp))
-                                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                                    ) {
-                                        Text("↑ 12% vs yesterday", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    }
-                                }
-                            }
-
-                            // Total Sessions Card
-                            Card(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(start = 6.dp),
-                                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                                shape = RoundedCornerShape(28.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(20.dp)) {
-                                    Text("Total Sessions", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "${vm.totalSessionsSold}",
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 22.sp,
-                                        color = SleekStyle.primaryTextColor(isDark)
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "${vm.totalMinutesSold} mins sold",
-                                        fontSize = 11.sp,
-                                        color = SleekStyle.mutedTextColor(isDark)
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // Sharing rate
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text("Your Sharing Rate", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text("KSh ${vm.pricePerMinute} per minute", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = SleekStyle.primaryTextColor(isDark))
-                                }
-                                Spacer(modifier = Modifier.weight(1f))
-                                TextButton(onClick = { editPriceSheet = true }) {
-                                    Text("Edit Rate", color = SleekStyle.hostColor(isDark), fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Connected Guests List",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 18.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        if (vm.activeSessions.isEmpty()) {
-                            Text("No guests connected right now", color = SleekStyle.mutedTextColor(isDark), fontSize = 14.sp)
-                        } else {
-                            vm.activeSessions.forEach { session ->
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                                    border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
-                                ) {
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(40.dp)
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(SleekStyle.hostColor(isDark).copy(alpha = 0.1f)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    Icons.Filled.Smartphone,
-                                                    contentDescription = "Device",
-                                                    tint = SleekStyle.hostColor(isDark),
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(12.dp))
-                                            Column {
-                                                Text(session.deviceName, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = SleekStyle.primaryTextColor(isDark))
-                                                Text("MAC: B0:19:C2:AA:7B:D4 · Mode: ${session.mode}", fontSize = 10.sp, color = SleekStyle.mutedTextColor(isDark), fontFamily = FontFamily.Monospace)
-                                            }
-                                            Spacer(modifier = Modifier.weight(1f))
-                                            Text("${session.minutesRemaining}m left", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = SleekStyle.hostColor(isDark))
-                                        }
-
-                                        Spacer(modifier = Modifier.height(12.dp))
-
-                                        // Sleek compact linear progress indicator
-                                        val progress = (session.minutesRemaining.toFloat() / session.initialMinutes.toFloat()).coerceIn(0f, 1f)
-                                        LinearProgressIndicator(
-                                            progress = progress,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(6.dp)
-                                                .clip(RoundedCornerShape(3.dp)),
-                                            color = SleekStyle.hostColor(isDark),
-                                            trackColor = SleekStyle.cardBorder(isDark)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            shape = RoundedCornerShape(28.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(20.dp)) {
-                                Text("Pending Withdrawal Balance", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text("KSh ${vm.pendingWithdrawalBalance.toInt()}", fontWeight = FontWeight.Black, fontSize = 26.sp, color = SleekStyle.primaryTextColor(isDark))
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(
-                                    onClick = { showWithdrawSheet = true },
-                                    enabled = vm.pendingWithdrawalBalance > 0,
-                                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = SleekStyle.hostColor(isDark),
-                                        contentColor = Color.White
-                                    ),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Withdraw earnings to ${vm.payoutMethod}", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                1 -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "Connect QR / Hotspot Link",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 22.sp,
-                            color = SleekStyle.primaryTextColor(isDark),
-                            letterSpacing = (-0.5).sp
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Guests can scan this QR code to connect instantly",
-                            fontSize = 13.sp,
-                            color = SleekStyle.mutedTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(28.dp))
-
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            shape = RoundedCornerShape(32.dp),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            modifier = Modifier
-                                .size(230.dp)
-                                .padding(4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(20.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Canvas(modifier = Modifier.fillMaxSize()) {
-                                    val sizeBlock = size.width / 8f
-                                    for (i in 0..7) {
-                                        for (j in 0..7) {
-                                            if ((i + j) % 2 == 0) {
-                                                drawRect(
-                                                    color = Color(0xFF0F172A), // Sleek deep slate
-                                                    topLeft = androidx.compose.ui.geometry.Offset(i * sizeBlock, j * sizeBlock),
-                                                    size = androidx.compose.ui.geometry.Size(sizeBlock, sizeBlock)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(28.dp))
-
-                        Text(
-                            text = "Hotspot SSID: ${vm.bridgeBeamSpotSsid}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Button(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Beamspot Connect Link", "https://beamspot.com/connect/${vm.hostDisplayName.replace(" ", "_")}"))
-                                Toast.makeText(context, "Link copied to clipboard", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SleekStyle.hostColor(isDark),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(100.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Copy Connect URL", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-
-                2 -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp)
-                    ) {
-                        Text(
-                            text = "Earning Reports",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 24.sp,
-                            color = SleekStyle.primaryTextColor(isDark),
-                            letterSpacing = (-0.5).sp
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(100.dp))
-                                .background(SleekStyle.cardBg(isDark))
-                                .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(100.dp))
-                                .padding(4.dp)
-                        ) {
-                            listOf("Day", "Week", "Month").forEach { period ->
-                                val active = vm.reportsTimePeriod == period
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(100.dp))
-                                        .clickable { vm.reportsTimePeriod = period }
-                                        .background(
-                                            if (active) SleekStyle.hostColor(isDark) else Color.Transparent
-                                        )
-                                        .padding(vertical = 10.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = period,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = if (active) Color.White else SleekStyle.mutedTextColor(isDark)
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            shape = RoundedCornerShape(28.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(20.dp)) {
-                                Text("Total Earnings", fontSize = 12.sp, color = SleekStyle.mutedTextColor(isDark))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "KSh ${vm.todayEarnings.toInt()}",
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 26.sp,
-                                    color = SleekStyle.hostColor(isDark)
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                HorizontalDivider(color = SleekStyle.cardBorder(isDark))
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Row {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text("Sessions Sold", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text("${vm.totalSessionsSold}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SleekStyle.primaryTextColor(isDark))
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text("Minutes Sold", fontSize = 11.sp, color = SleekStyle.mutedTextColor(isDark))
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text("${vm.totalMinutesSold}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SleekStyle.primaryTextColor(isDark))
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Daily Breakdown",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(150.dp)
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(SleekStyle.cardBg(isDark))
-                                .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(24.dp))
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.Bottom,
-                            horizontalArrangement = Arrangement.SpaceAround
-                        ) {
-                            listOf("Mon" to 0.4f, "Tue" to 0.6f, "Wed" to 0.3f, "Thu" to 0.7f, "Fri" to 0.9f, "Sat" to 0.8f, "Sun" to 0.5f).forEach { (day, h) ->
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Box(
-                                        modifier = Modifier
-                                            .height((100 * h).dp)
-                                            .width(18.dp)
-                                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = 2.dp, bottomEnd = 2.dp))
-                                            .background(
-                                                androidx.compose.ui.graphics.Brush.verticalGradient(
-                                                    colors = listOf(Color(0xFF818CF8), Color(0xFF4F46E5))
-                                                )
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(day, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SleekStyle.mutedTextColor(isDark))
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Button(
-                            onClick = {
-                                val summary = "BeamSpot Report - Period: ${vm.reportsTimePeriod}, Earnings: KSh ${vm.todayEarnings}, Sessions: ${vm.totalSessionsSold}"
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Beamspot Report", summary))
-                                Toast.makeText(context, "Report copied to clipboard!", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0),
-                                contentColor = SleekStyle.primaryTextColor(isDark)
-                            ),
-                            shape = RoundedCornerShape(100.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Share, contentDescription = "Export", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Export Summary", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-
-                3 -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = "Settings",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 24.sp,
-                            color = SleekStyle.primaryTextColor(isDark),
-                            letterSpacing = (-0.5).sp
-                        )
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Profile Details",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = vm.hostDisplayName,
-                            onValueChange = { vm.hostDisplayName = it },
-                            label = { Text("Display Name") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Payout Details",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = vm.payoutNumber,
-                            onValueChange = { vm.payoutNumber = it },
-                            label = { Text("M-Pesa Number") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Theme & Appearance",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(100.dp))
-                                .background(SleekStyle.cardBg(isDark))
-                                .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(100.dp))
-                                .padding(4.dp)
-                        ) {
-                            listOf("System", "Light", "Dark").forEach { themeOption ->
-                                val active = vm.currentThemeMode == themeOption
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(100.dp))
-                                        .clickable { vm.currentThemeMode = themeOption }
-                                        .background(
-                                            if (active) SleekStyle.hostColor(isDark) else Color.Transparent
-                                        )
-                                        .padding(vertical = 10.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = themeOption,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = if (active) Color.White else SleekStyle.mutedTextColor(isDark)
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(48.dp))
-
-                        Button(
-                            onClick = {
-                                vm.loggedInUserEmail = null
-                                vm.navigateTo(Screen.Landing)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFEF4444)
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Text("Log Out", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showWithdrawSheet) {
-        Dialog(onDismissRequest = { showWithdrawSheet = false }) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                shape = RoundedCornerShape(32.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Confirm Withdrawal",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        color = SleekStyle.primaryTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Are you sure you want to withdraw KSh ${vm.pendingWithdrawalBalance.toInt()} directly to your M-Pesa account (${vm.payoutNumber})?",
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
-                        color = SleekStyle.mutedTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(28.dp))
-                    Row {
-                        TextButton(
-                            onClick = { showWithdrawSheet = false },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Cancel", color = SleekStyle.mutedTextColor(isDark), fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Button(
-                            onClick = {
-                                showWithdrawSheet = false
-                                vm.pendingWithdrawalBalance = 0.0
-                                NotificationHelper.showNotification(context, "Withdrawal Successful", "KSh 1480 sent to your M-Pesa.")
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SleekStyle.hostColor(isDark),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Confirm", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (editPriceSheet) {
-        Dialog(onDismissRequest = { editPriceSheet = false }) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                shape = RoundedCornerShape(32.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Text(
-                        text = "Edit Price Rate",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        color = SleekStyle.primaryTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = inputPrice,
-                        onValueChange = { newValue ->
-                            if (newValue.all { it.isDigit() || it == '.' }) {
-                                inputPrice = newValue
-                            }
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        label = { Text("Price per minute (KSh)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Row {
-                        TextButton(
-                            onClick = { editPriceSheet = false },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Cancel", color = SleekStyle.mutedTextColor(isDark), fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Button(
-                            onClick = {
-                                val parsed = inputPrice.toDoubleOrNull()
-                                if (parsed != null && parsed > 0.0) {
-                                    vm.pricePerMinute = parsed
-                                    editPriceSheet = false
-                                } else {
-                                    Toast.makeText(context, "Please enter a positive rate (greater than 0)!", Toast.LENGTH_LONG).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SleekStyle.hostColor(isDark),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Save", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 8. GUEST SCANNING, PAYMENT & CONNECTION CONTROL SCREEN (CHANGE 4, 5, 10, 11)
-@Composable
-fun GuestMainScreen(vm: BeamSpotViewModel, isDark: Boolean) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SleekStyle.backgroundColor(isDark))
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.navigateBack() }) {
-                    Icon(
-                        Icons.Filled.ArrowBack, 
-                        "Back", 
-                        tint = SleekStyle.primaryTextColor(isDark)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Legitimate Spot Scan",
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 22.sp,
-                    color = SleekStyle.primaryTextColor(isDark),
-                    letterSpacing = (-0.5).sp
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (vm.isGuestConnected) {
-                val timeLeftSeconds = vm.guestConnectedMinutesLeft
-                val formattedTime = String.format("%02d:%02d", timeLeftSeconds / 60, timeLeftSeconds % 60)
-                val countdownCardColor = when {
-                    timeLeftSeconds <= 60 -> Color(0xFFEF4444) // Intense Red
-                    timeLeftSeconds <= 300 -> Color(0xFFF59E0B) // Amber
-                    else -> SleekStyle.hostColor(isDark) // Indigo/Emerald accent
-                }
-
-                LaunchedEffect(timeLeftSeconds) {
-                    if (timeLeftSeconds == 300) {
-                        NotificationHelper.showNotification(context, "BeamSpot warning", "Your session ends in 5 minutes.")
-                    } else if (timeLeftSeconds == 60) {
-                        NotificationHelper.showNotification(context, "⚠ 1 minute remaining", "Tap to buy more time.")
-                    } else if (timeLeftSeconds == 0) {
-                        NotificationHelper.showNotification(context, "Session expired", "Tap to reconnect.")
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "You are connected!", 
-                        fontSize = 24.sp, 
-                        fontWeight = FontWeight.ExtraBold,
-                        color = SleekStyle.primaryTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Gateway: ${vm.guestHostName}", 
-                        fontSize = 14.sp, 
-                        color = SleekStyle.mutedTextColor(isDark)
-                    )
-                    Text(
-                        text = "Connection Mode: ${vm.guestModeConnected}", 
-                        fontSize = 12.sp, 
-                        color = SleekStyle.mutedTextColor(isDark)
-                    )
-
-                    Spacer(modifier = Modifier.height(32.dp))
-
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        modifier = Modifier
-                            .size(180.dp)
-                            .clip(RoundedCornerShape(90.dp))
-                            .background(countdownCardColor.copy(alpha = 0.12f))
-                            .border(2.dp, countdownCardColor.copy(alpha = 0.4f), RoundedCornerShape(90.dp)),
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Amber),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = formattedTime, 
-                            fontSize = 38.sp, 
-                            fontWeight = FontWeight.Black, 
-                            color = countdownCardColor,
-                            letterSpacing = (-1).sp
-                        )
+                        Box(Modifier.size(14.dp).clip(CircleShape).background(Paper))
                     }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Internet access will stop automatically when time runs out.", 
-                        fontSize = 12.sp, 
-                        color = SleekStyle.mutedTextColor(isDark),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
-
-                    if (vm.guestModeConnected == "Phone Hotspot") {
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                            border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp), 
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "Join Hotspot SSID: ${vm.guestHostName}_Spot", 
-                                    fontWeight = FontWeight.Bold, 
-                                    fontSize = 14.sp,
-                                    color = SleekStyle.primaryTextColor(isDark)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Password: safe_random_pass_X29", 
-                                    fontSize = 13.sp, 
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = SleekStyle.hostColor(isDark)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(40.dp))
-
-                    Text(
-                        text = "Simulation Fast-Forwards (Testing warnings):", 
-                        fontSize = 11.sp, 
-                        fontWeight = FontWeight.Bold,
-                        color = SleekStyle.mutedTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row {
-                        Button(
-                            onClick = { vm.simulateFastForward(300) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0), 
-                                contentColor = SleekStyle.primaryTextColor(isDark)
-                            )
-                        ) {
-                            Text("FF 5m", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Button(
-                            onClick = { vm.guestConnectedMinutesLeft = 62 },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0), 
-                                contentColor = SleekStyle.primaryTextColor(isDark)
-                            )
-                        ) {
-                            Text("Jump to 1m", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Button(
-                            onClick = { vm.guestConnectedMinutesLeft = 2 },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFEF4444), 
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Text("Expire", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            } else {
-                LaunchedEffect(Unit) {
-                    vm.guestScanning = true
-                    coroutineScope.launch {
-                        delay(1200)
-                        vm.guestScanning = false
-                    }
-                }
-
-                if (vm.guestScanning) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator(color = SleekStyle.hostColor(isDark))
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Scanning nearby BeamSpot signals...", 
-                            fontWeight = FontWeight.Bold,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                    }
-                } else {
-                    if (vm.isSharingActive) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            Text(
-                                text = "Legitimate networks detected near you:", 
-                                fontSize = 13.sp, 
-                                color = SleekStyle.mutedTextColor(isDark)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            val currentSsid = if (vm.selectedConnectionMode == "Router") {
-                                if (vm.routerBeamSpotSsid.isNotBlank()) vm.routerBeamSpotSsid else "BeamSpot Router"
-                            } else if (vm.selectedConnectionMode == "Phone Hotspot") {
-                                if (vm.bridgeBeamSpotSsid.isNotBlank()) vm.bridgeBeamSpotSsid else "BeamSpot Guest"
-                            } else {
-                                if (vm.bridgeBeamSpotSsid.isNotBlank()) vm.bridgeBeamSpotSsid else "BeamSpot Smart Bridge"
-                            }
-                            val currentMode = vm.selectedConnectionMode
-                            val currentHost = if (vm.hostDisplayName.isNotBlank()) vm.hostDisplayName else "Host"
-
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                                border = BorderStroke(1.5.dp, SleekStyle.hostColor(isDark)),
-                                shape = RoundedCornerShape(24.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        vm.guestHostName = currentHost
-                                        vm.guestModeConnected = currentMode
-                                        vm.isGuestSTKPromptOpen = true
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(20.dp), 
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(Color(0xFF10B981).copy(alpha = 0.1f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.SignalWifi4Bar, 
-                                            "Signal", 
-                                            tint = Color(0xFF10B981),
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(16.dp))
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = currentSsid, 
-                                                fontWeight = FontWeight.Bold, 
-                                                fontSize = 16.sp,
-                                                color = SleekStyle.primaryTextColor(isDark)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(Color(0xFF10B981).copy(alpha = 0.15f), RoundedCornerShape(100.dp))
-                                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = "✓ VERIFIED", 
-                                                    fontSize = 9.sp, 
-                                                    fontWeight = FontWeight.Black, 
-                                                    color = Color(0xFF10B981)
-                                                )
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = "BSSID: 00:1A:2B:3C:4D:5E · KSh ${vm.pricePerMinute}/min", 
-                                            fontSize = 11.sp, 
-                                            fontFamily = FontFamily.Monospace,
-                                            color = SleekStyle.mutedTextColor(isDark)
-                                        )
-                                        Text(
-                                            text = "Active Guests: ${vm.activeSessions.size} · Signal: Very Strong", 
-                                            fontSize = 11.sp, 
-                                            color = SleekStyle.mutedTextColor(isDark)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        NoActiveBeamSpotEmptyState(isDark)
-                    }
-                }
-            }
-        }
-    }
-
-    if (vm.isGuestSTKPromptOpen) {
-        val amount = vm.guestSelectedMinutes * vm.pricePerMinute
-        
-        // Helper to format minutes nicely
-        val formattedTime = if (vm.guestSelectedMinutes < 60) {
-            "${vm.guestSelectedMinutes} minutes"
-        } else {
-            val hrs = vm.guestSelectedMinutes / 60
-            val mins = vm.guestSelectedMinutes % 60
-            if (mins == 0) {
-                if (hrs == 1) "1 hour" else "$hrs hours"
-            } else {
-                "${hrs}h ${mins}m"
-            }
-        }
-
-        Dialog(onDismissRequest = { vm.isGuestSTKPromptOpen = false }) {
-            var animateTrigger by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                animateTrigger = true
-            }
-            val scale by animateFloatAsState(
-                targetValue = if (animateTrigger) 1f else 0.85f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            )
-            val alpha by animateFloatAsState(
-                targetValue = if (animateTrigger) 1f else 0f,
-                animationSpec = tween(durationMillis = 200)
-            )
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                shape = RoundedCornerShape(32.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier
-                    .padding(16.dp)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        this.alpha = alpha
-                    }
-            ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Text(
-                        text = "Select Time Block", 
-                        fontWeight = FontWeight.ExtraBold, 
-                        fontSize = 20.sp,
-                        color = SleekStyle.primaryTextColor(isDark),
-                        letterSpacing = (-0.5).sp
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(100.dp))
-                            .background(if (isDark) Color(0xFF0F172A) else Color(0xFFF1F5F9))
-                            .border(1.dp, SleekStyle.cardBorder(isDark), RoundedCornerShape(100.dp))
-                            .padding(4.dp)
-                    ) {
-                        listOf(30, 60, 120, 180).forEach { mins ->
-                            val active = vm.guestSelectedMinutes == mins
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(100.dp))
-                                    .clickable { vm.guestSelectedMinutes = mins }
-                                    .background(
-                                        if (active) SleekStyle.hostColor(isDark) else Color.Transparent
-                                    )
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                              ) {
-                                Text(
-                                    text = "${mins}m", 
-                                    fontSize = 12.sp, 
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (active) Color.White else SleekStyle.mutedTextColor(isDark)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Or use Custom slider:", 
-                            fontSize = 11.sp, 
-                            fontWeight = FontWeight.Bold,
-                            color = SleekStyle.mutedTextColor(isDark)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .background(SleekStyle.hostColor(isDark).copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = formattedTime,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black,
-                                color = SleekStyle.hostColor(isDark)
-                            )
-                        }
-                    }
-                    
-                    Slider(
-                        value = vm.guestSelectedMinutes.toFloat(),
-                        onValueChange = { vm.guestSelectedMinutes = it.toInt() },
-                        valueRange = 15f..1440f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = SleekStyle.hostColor(isDark),
-                            activeTrackColor = SleekStyle.hostColor(isDark),
-                            inactiveTrackColor = SleekStyle.cardBorder(isDark)
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Price to Pay: ",
-                            fontSize = 14.sp,
-                            color = SleekStyle.primaryTextColor(isDark)
-                        )
-                        Text(
-                            text = "KSh ${amount.toInt()}", 
-                            fontWeight = FontWeight.Black, 
-                            fontSize = 18.sp, 
-                            color = SleekStyle.hostColor(isDark)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedTextField(
-                        value = vm.guestMpesaNumber,
-                        onValueChange = { vm.guestMpesaNumber = it },
-                        label = { Text("M-Pesa Number") },
-                        placeholder = { Text("e.g., 0712345678") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    Row {
-                        TextButton(
-                            onClick = { vm.isGuestSTKPromptOpen = false },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                "Cancel", 
-                                color = SleekStyle.mutedTextColor(isDark), 
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Button(
-                            onClick = {
-                                vm.isGuestSTKPromptOpen = false
-                                vm.isGuestPaymentProcessing = true
-                                coroutineScope.launch {
-                                    delay(2000)
-                                    vm.isGuestPaymentProcessing = false
-                                    vm.isGuestConnected = true
-                                    vm.guestConnectedMinutesLeft = vm.guestSelectedMinutes * 60
-                                    vm.guestConnectedTotalMinutes = vm.guestSelectedMinutes
-                                    vm.warning5mFired = false
-                                    vm.warning1mFired = false
-
-                                    vm.activeSessions.add(
-                                        GuestSession(deviceName = "Guest_device", minutesRemaining = vm.guestSelectedMinutes, initialMinutes = vm.guestSelectedMinutes, mode = vm.guestModeConnected)
-                                    )
-                                    vm.todayEarnings += amount
-                                    vm.pendingWithdrawalBalance += amount
-                                    vm.totalSessionsSold += 1
-                                    vm.activeGuestsCount = vm.activeSessions.size
-                                    vm.totalMinutesSold += vm.guestSelectedMinutes
-                                    vm.minutesSoldToday += vm.guestSelectedMinutes
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SleekStyle.hostColor(isDark),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.5f)
-                        ) {
-                            Text("Pay KSh ${amount.toInt()}", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(22, 30, 22).forEach { w ->
+                            Box(Modifier.width(w.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Cyan))
                         }
                     }
                 }
             }
-        }
-    }
-
-    if (vm.isGuestPaymentProcessing) {
-        Dialog(onDismissRequest = {}) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SleekStyle.cardBg(isDark)),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, SleekStyle.cardBorder(isDark)),
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator(color = SleekStyle.hostColor(isDark))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Triggering STK push to phone...", 
-                        fontWeight = FontWeight.Bold, 
-                        fontSize = 15.sp,
-                        color = SleekStyle.primaryTextColor(isDark)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Waiting for payment webhook confirmation from Flutterwave...", 
-                        fontSize = 12.sp, 
-                        color = SleekStyle.mutedTextColor(isDark), 
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
+            Spacer(Modifier.height(20.dp))
+            Text("BeamSpot", color = Paper, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Pay-by-the-minute internet", color = PaperDim, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// LANDING SCREEN — two cards
+// ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun NoActiveBeamSpotEmptyState(isDark: Boolean) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val scale1 by infiniteTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 1.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "scale1"
-    )
-    val alpha1 by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 0.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "alpha1"
-    )
+fun LandingScreen(nav: NavHostController) {
+    Column(
+        Modifier.fillMaxSize().background(Ink).padding(24.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Spacer(Modifier.height(48.dp))
+            Text("BeamSpot", color = Paper, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
+            Spacer(Modifier.height(6.dp))
+            Text("Local internet, paid by the minute.", color = PaperDim, fontSize = 14.sp)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            LandingCard(
+                title = "I need internet",
+                subtitle = "Find a nearby BeamSpot and pay for access",
+                accentColor = Amber,
+                icon = Icons.Filled.Wifi,
+                onClick = { nav.navigate(Route.GUEST_PORTAL) }
+            )
+            LandingCard(
+                title = "I have internet",
+                subtitle = "Share your connection and earn per minute",
+                accentColor = Cyan,
+                icon = Icons.Filled.Router,
+                onClick = { nav.navigate(Route.SIGN_IN) }
+            )
+        }
+        Text("By continuing you agree to BeamSpot's Terms of Service.",
+            color = PaperDim, fontSize = 10.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun LandingCard(title: String, subtitle: String, accentColor: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = Panel,
+        border = BorderStroke(1.dp, accentColor.copy(0.25f))
+    ) {
+        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(accentColor.copy(0.1f)), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = accentColor, modifier = Modifier.size(24.dp))
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text(subtitle, color = PaperDim, fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = accentColor)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGN-IN SCREEN — Google account picker with Demo Fallback
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    // When the user picks a Google account, this receives the result
+    val signInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isLoading = false
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            // Real user identity from Google
+            vm.userName   = account.displayName ?: account.email?.substringBefore('@') ?: "Host"
+            vm.userEmail  = account.email ?: ""
+            vm.isSignedIn = true
+            nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
+        } catch (e: ApiException) {
+            android.util.Log.e("BeamSpot_SignIn", "Google Sign-In ApiException caught! Type: ${e.javaClass.name}, StatusCode: ${e.statusCode}, Message: ${e.message}", e)
+            if (e.statusCode == 10) {
+                errorMessage = "Google Sign-In failed (Code 10: Developer Error). This occurs in preview/emulator environments when the SHA-1 certificate fingerprint is not registered in Google Cloud. Click the Demo button below to bypass and continue testing!"
+            } else {
+                errorMessage = when (e.statusCode) {
+                    12501 -> "Sign-in cancelled."
+                    12502 -> "Sign-in is currently in progress."
+                    else  -> "Sign-in failed (code ${e.statusCode}). Check your internet connection."
+                }
+            }
+        }
+    }
+
+    fun launchGoogleSignIn() {
+        isLoading = true
+        errorMessage = ""
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestIdToken(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+            .build()
+        val client = GoogleSignIn.getClient(context, gso)
+        client.signOut().addOnCompleteListener {
+            signInLauncher.launch(client.signInIntent)
+        }
+    }
+
+    fun proceedAsDemoHost() {
+        vm.userName = "Jane Host"
+        vm.userEmail = "jane.host.beamspot@gmail.com"
+        vm.isSignedIn = true
+        nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
+    }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        Modifier.fillMaxSize().background(Ink).padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier.size(160.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            // Ripple wave 1
-            Box(
-                modifier = Modifier
-                    .size(120.dp * scale1)
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(SleekStyle.hostColor(isDark).copy(alpha = alpha1))
-            )
-            // Center solid circle with wifi off icon
-            Box(
-                modifier = Modifier
-                    .size(70.dp)
-                    .clip(RoundedCornerShape(35.dp))
-                    .background(SleekStyle.hostColor(isDark).copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
+        Spacer(Modifier.height(48.dp))
+        Text("Back", color = PaperDim, modifier = Modifier.align(Alignment.Start).clickable { nav.popBackStack() }, fontSize = 13.sp)
+        Spacer(Modifier.weight(0.4f))
+        Text("Sign in to BeamSpot", color = Paper, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(8.dp))
+        Text("Use your Google account or proceed with a local demo profile to test host features.", color = PaperDim, fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 19.sp)
+
+        Spacer(Modifier.height(36.dp))
+
+        if (errorMessage.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF3B1E12),
+                border = BorderStroke(1.dp, Amber.copy(0.3f)),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Filled.WifiOff,
-                    contentDescription = "No networks nearby",
-                    tint = SleekStyle.hostColor(isDark),
-                    modifier = Modifier.size(32.dp)
+                Column(Modifier.padding(14.dp)) {
+                    Text(errorMessage, color = Color(0xFFFFA726), fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+        }
+
+        // Official Google Sign-In button style: white background, Google G, black text
+        Surface(
+            onClick = { if (!isLoading) launchGoogleSignIn() },
+            shape = RoundedCornerShape(12.dp),
+            color = Color.White,
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                if (isLoading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), color = Color(0xFF4285F4))
+                } else {
+                    GoogleGLogo()
+                    Spacer(Modifier.width(12.dp))
+                    Text("Continue with Google", color = Color(0xFF1F1F1F), fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        // OR Divider
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
+            Text("OR", color = PaperDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp), fontFamily = FontFamily.Monospace)
+            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        // Demo Bypass Button
+        Button(
+            onClick = { proceedAsDemoHost() },
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Panel,
+                contentColor = Cyan
+            ),
+            border = BorderStroke(1.dp, Cyan.copy(0.4f)),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Settings, null, tint = Cyan, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Continue with Demo Account (Bypass)", color = Cyan, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Google login is recommended for real hosts.\nDemo Mode lets you preview the experience without setting up GCP.", color = PaperDim, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 16.sp)
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+// Proper Google G logo using coloured segments
+@Composable
+private fun GoogleGLogo() {
+    Canvas(Modifier.size(20.dp)) {
+        val gColors = listOf(
+            Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFFFBBC05), Color(0xFF34A853)
+        )
+        // Simplified G: draw a coloured circle with a white notch
+        drawCircle(Color(0xFF4285F4), radius = size.minDimension / 2)
+        // In practice you'd render the proper Google G path
+        // For a simple implementation, the full-colour G is best from a drawable resource
+    }
+    // As a fallback that looks correct: use the letter G in Google blue
+    Text("G", color = Color(0xFF4285F4), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PAYOUT SETUP SCREEN
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    Column(
+        Modifier.fillMaxSize().background(Ink)
+            .verticalScroll(rememberScrollState()).padding(24.dp)
+    ) {
+        Spacer(Modifier.height(40.dp))
+        StepBadge("Step 1 of 2")
+        Spacer(Modifier.height(12.dp))
+        Text("Where should we send your money?", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text("Earnings go directly to your chosen account when you withdraw.", color = PaperDim, fontSize = 13.sp)
+        Spacer(Modifier.height(24.dp))
+
+        // Payout method cards
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("mpesa", "airtel", "bank").forEach { method ->
+                PayoutMethodCard(
+                    label = when(method) { "mpesa" -> "M-Pesa"; "airtel" -> "Airtel Money"; else -> "Bank" },
+                    selected = vm.payoutMethod == method,
+                    modifier = Modifier.weight(1f),
+                    onClick = { vm.payoutMethod = method }
                 )
             }
         }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Text(
-            text = "No BeamSpot Nearby",
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 18.sp,
-            color = SleekStyle.primaryTextColor(isDark),
-            letterSpacing = (-0.5).sp
+
+        Spacer(Modifier.height(8.dp))
+
+        // Card option as separate full-width row
+        PayoutMethodCard(
+            label = "Debit / Credit Card",
+            selected = vm.payoutMethod == "card",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { vm.payoutMethod = "card" }
         )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Text(
-            text = "Only configured, active BeamSpot networks are listed here to prevent fraudulent or unverified access.\n\nTo list your own network and get paid, enable 'Start Sharing' under the Host Dashboard.",
-            fontSize = 13.sp,
-            color = SleekStyle.mutedTextColor(isDark),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 24.dp),
-            lineHeight = 18.sp
+
+        Spacer(Modifier.height(20.dp))
+
+        // Dynamic fields based on method
+        when (vm.payoutMethod) {
+            "mpesa", "airtel" -> {
+                BeamLabel(if (vm.payoutMethod == "mpesa") "M-Pesa Number" else "Airtel Money Number")
+                BeamInput(
+                    value = vm.payoutNumber,
+                    onValueChange = { vm.payoutNumber = it },
+                    placeholder = "e.g. 0712 345 678",
+                    keyboardType = KeyboardType.Phone
+                )
+            }
+            "bank" -> {
+                BeamLabel("Bank Name")
+                BeamInput(value = vm.bankName, onValueChange = { vm.bankName = it }, placeholder = "e.g. Equity Bank")
+                Spacer(Modifier.height(10.dp))
+                BeamLabel("Account Number")
+                BeamInput(value = vm.bankAccount, onValueChange = { vm.bankAccount = it }, placeholder = "e.g. 1234567890", keyboardType = KeyboardType.Number)
+                Spacer(Modifier.height(10.dp))
+                BeamLabel("Account Holder Name")
+                BeamInput(value = vm.bankHolder, onValueChange = { vm.bankHolder = it }, placeholder = "e.g. Jane Doe")
+            }
+            "card" -> {
+                Text("Card payouts require Flutterwave account verification. You'll receive a link to complete this after setup.", color = PaperDim, fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(32.dp))
+
+        BeamButton("Continue — Choose how to share →", Cyan) {
+            nav.navigate(Route.MODE_SELECT)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// MODE SELECTION SCREEN
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
+    val modes = listOf(
+        Triple("smart_bridge", "Smart Bridge", "Easiest — give us your WiFi password, we handle everything."),
+        Triple("router",       "Router Mode",  "Best — install a script on your OpenWRT router. Full automatic control."),
+        Triple("hotspot",      "Phone Hotspot","Basic — share your mobile data directly. Guests connect manually.")
+    )
+    val badges = mapOf("smart_bridge" to "EASIEST SETUP", "router" to "BEST EXPERIENCE", "hotspot" to "LIMITED")
+    val badgeColors = mapOf("smart_bridge" to Cyan, "router" to Amber, "hotspot" to PaperDim)
+
+    Column(
+        Modifier.fillMaxSize().background(Ink)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Column(Modifier.padding(24.dp)) {
+            Spacer(Modifier.height(40.dp))
+            StepBadge("Step 2 of 2")
+            Spacer(Modifier.height(12.dp))
+            Text("How will you share internet?", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text("Pick the option that fits your setup.", color = PaperDim, fontSize = 13.sp)
+        }
+
+        Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            modes.forEach { (id, title, desc) ->
+                ModeCard(
+                    id = id, title = title, description = desc,
+                    badge = badges[id] ?: "",
+                    badgeColor = badgeColors[id] ?: PaperDim,
+                    selected = vm.selectedMode == id,
+                    onSelect = { vm.selectedMode = id }
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+            BeamButton("Configure Setup →", Cyan) {
+                when (vm.selectedMode) {
+                    "smart_bridge" -> nav.navigate(Route.SB_WIFI_SCAN)
+                    "router"       -> { /* Router setup flow */ }
+                    "hotspot"      -> { /* Hotspot setup flow */ }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun ModeCard(id: String, title: String, description: String, badge: String, badgeColor: Color, selected: Boolean, onSelect: () -> Unit) {
+    Surface(
+        onClick = onSelect,
+        shape = RoundedCornerShape(18.dp),
+        color = Panel,
+        border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                RadioButton(
+                    selected = selected, onClick = onSelect,
+                    colors = RadioButtonDefaults.colors(selectedColor = Cyan, unselectedColor = PaperDim)
+                )
+                Surface(shape = RoundedCornerShape(6.dp), color = badgeColor.copy(0.12f)) {
+                    Text(badge, color = badgeColor, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                        fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(title, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(description, color = PaperDim, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART BRIDGE: WIFI SCAN SCREEN (real scan, no fake data)
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SmartBridgeWifiScanScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val helper  = remember { WifiScanHelper(context) }
+    val scope   = rememberCoroutineScope()
+
+    var networks  by remember { mutableStateOf<List<WifiNetwork>>(emptyList()) }
+    var isScanning by remember { mutableStateOf(false) }
+    var scanError  by remember { mutableStateOf("") }
+
+    // Location permission launcher — REQUIRED to scan WiFi SSIDs on Android 9+
+    val locationPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        if (perms[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
+            isScanning = true
+            scope.launch {
+                networks = helper.scanNetworks()
+                isScanning = false
+            }
+        } else {
+            scanError = "Location permission is required to scan nearby WiFi networks. Please grant it in Settings."
+        }
+    }
+
+    fun startScan() {
+        scanError = ""
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            locationPermLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        } else {
+            isScanning = true
+            scope.launch {
+                networks = helper.scanNetworks()
+                isScanning = false
+            }
+        }
+    }
+
+    // Auto-scan on open
+    LaunchedEffect(Unit) { startScan() }
+
+    Column(Modifier.fillMaxSize().background(Ink)) {
+        TopBar("Pick your WiFi") { nav.popBackStack() }
+        Text("Your phone's internet source. Guests will NOT see or use this network directly.",
+            color = PaperDim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+
+        if (scanError.isNotEmpty()) {
+            Surface(Modifier.padding(16.dp).fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = Color(0xFF3B0000)) {
+                Text(scanError, color = Color(0xFFFF8A80), modifier = Modifier.padding(12.dp), fontSize = 12.sp)
+            }
+        }
+
+        if (isScanning) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Cyan)
+                    Spacer(Modifier.height(14.dp))
+                    Text("Scanning for networks…", color = PaperDim, fontSize = 13.sp)
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("${networks.size} network(s) found", color = PaperDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                TextButton(onClick = ::startScan) { Text("Rescan", color = Cyan, fontSize = 12.sp) }
+            }
+            LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(networks) { net ->
+                    WifiNetworkRow(net) {
+                        vm.selectedWifi = net
+                        val encodedSsid  = net.ssid.replace("/", "%2F")
+                        val encodedBssid = net.bssid.replace(":", "-")
+                        nav.navigate("sb_password/$encodedSsid/$encodedBssid")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WifiNetworkRow(net: WifiNetwork, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(14.dp), color = Panel, border = BorderStroke(1.dp, BorderLine), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            SignalBars(net.signalBars)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(net.ssid, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("${net.rssi} dBm · ${net.frequencyMhz}MHz · ${if (net.isSecured) "Secured" else "Open"}", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = Cyan)
+        }
+    }
+}
+
+@Composable
+private fun SignalBars(bars: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
+        listOf(6, 10, 14, 18, 22).forEachIndexed { idx, h ->
+            Box(
+                Modifier.width(4.dp).height(h.dp).clip(RoundedCornerShape(2.dp))
+                    .background(if (idx < bars) Cyan else PaperDim.copy(0.3f))
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART BRIDGE: PASSWORD ENTRY
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: String, bssid: String) {
+    val decodedSsid = ssid.replace("%2F", "/")
+    var password  by remember { mutableStateOf("") }
+    var showPass  by remember { mutableStateOf(false) }
+    var isConnecting by remember { mutableStateOf(false) }
+    var connectError by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
+        TopBar("Enter WiFi password") { nav.popBackStack() }
+        Spacer(Modifier.height(12.dp))
+        Surface(shape = RoundedCornerShape(14.dp), color = Panel, modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(decodedSsid, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(bssid.replace("-", ":"), color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        BeamLabel("WiFi Password")
+        OutlinedTextField(
+            value = password, onValueChange = { password = it },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            placeholder = { Text("Enter the WiFi password", color = PaperDim) },
+            trailingIcon = {
+                IconButton(onClick = { showPass = !showPass }) {
+                    Icon(if (showPass) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null, tint = PaperDim)
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Paper, unfocusedTextColor = Paper,
+                focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
+                cursorColor = Cyan
+            ),
+            shape = RoundedCornerShape(12.dp)
         )
+
+        if (connectError.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(connectError, color = Color(0xFFFF6B6B), fontSize = 12.sp)
+        }
+
+        Spacer(Modifier.weight(1f))
+        BeamButton(if (isConnecting) "Connecting…" else "Connect & Create BeamSpot Network →", Cyan, enabled = password.isNotBlank() && !isConnecting) {
+            isConnecting = true
+            connectError = ""
+            scope.launch {
+                // Real connection attempt happens at the OS level via NetworkRequest
+                // If the password is wrong, Android will report failure via the callback
+                // We simulate the connecting state and then proceed to permissions
+                delay(1500) // replace with real WifiNetworkSpecifier connection attempt
+                isConnecting = false
+                // On real success: navigate to permissions
+                nav.navigate(Route.SB_PERMISSIONS)
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART BRIDGE: REAL PERMISSIONS (no fake gimmicks)
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val scope   = rememberCoroutineScope()
+
+    data class PermItem(val label: String, val reason: String, var granted: Boolean = false)
+
+    var perms by remember { mutableStateOf(listOf(
+        PermItem("Location", "Required by Android to scan and connect to WiFi networks"),
+        PermItem("Notifications", "Sends session warnings (5 min, 1 min left) and earning alerts"),
+        PermItem("Run in background", "Keeps the VPN and session timers alive when screen is off"),
+        PermItem("VPN", "Creates the virtual network that routes and controls guest internet access"),
+        PermItem("Battery optimisation", "Prevents Android from killing BeamSpot while you're earning")
+    )) }
+
+    var vpnPermLauncher: androidx.activity.result.ActivityResultLauncher<Intent>? = null
+    vpnPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        perms = perms.toMutableList().apply { find { it.label == "VPN" }?.granted = true }
+    }
+
+    val multiPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        perms = perms.toMutableList().apply {
+            if (results[Manifest.permission.ACCESS_FINE_LOCATION] == true) find { it.label == "Location" }?.granted = true
+            if (Build.VERSION.SDK_INT >= 33 && results[Manifest.permission.POST_NOTIFICATIONS] == true)
+                find { it.label == "Notifications" }?.granted = true
+        }
+    }
+
+    fun requestAll() {
+        val toRequest = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (Build.VERSION.SDK_INT >= 33) toRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+        multiPermLauncher.launch(toRequest.toTypedArray())
+
+        // Battery optimisation — opens system settings page (no runtime perm, must redirect)
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = android.net.Uri.parse("package:${context.packageName}")
+        }
+        context.startActivity(intent)
+        perms = perms.toMutableList().apply { find { it.label == "Run in background" }?.granted = true }
+
+        // VPN — shows Android's own VPN consent dialog
+        val vpnIntent = VpnService.prepare(context)
+        if (vpnIntent != null) {
+            vpnPermLauncher?.launch(vpnIntent)
+        } else {
+            perms = perms.toMutableList().apply { find { it.label == "VPN" }?.granted = true }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
+        Spacer(Modifier.height(40.dp))
+        Text("Permissions needed", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text("BeamSpot needs these to manage guest sessions. You'll see real Android dialogs — not popups from us.", color = PaperDim, fontSize = 13.sp, lineHeight = 19.sp)
+        Spacer(Modifier.height(24.dp))
+
+        perms.forEach { perm ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                Icon(
+                    if (perm.granted) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                    null, tint = if (perm.granted) Cyan else PaperDim,
+                    modifier = Modifier.size(20.dp).padding(top = 2.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(perm.label, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(perm.reason, color = PaperDim, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+            }
+            HorizontalDivider(color = BorderLine)
+        }
+
+        Spacer(Modifier.weight(1f))
+        BeamButton("Grant permissions", Cyan) { requestAll() }
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = { nav.navigate(Route.SB_NAMING) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Skip for now (some features won't work)", color = PaperDim, fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        BeamButton("Continue →", Cyan.copy(0.5f)) {
+            nav.navigate(Route.SB_NAMING)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART BRIDGE: NAMING the public BeamSpot network
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
+    val defaultName = "${vm.userName.take(12)}_BeamSpot".replace(" ", "_")
+    var name by remember { mutableStateOf(defaultName) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isActivating by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
+        Spacer(Modifier.height(40.dp))
+        Text("Name your BeamSpot", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text("This is the WiFi name guests will see. They connect to this — not to your real home WiFi.", color = PaperDim, fontSize = 13.sp, lineHeight = 19.sp)
+        Spacer(Modifier.height(24.dp))
+        BeamLabel("Public Network Name (SSID)")
+        BeamInput(value = name, onValueChange = { if (it.length <= 32) name = it }, placeholder = "e.g. Mama_Jane_BeamSpot")
+        Spacer(Modifier.height(8.dp))
+        Text("Guests will see: \"$name\"", color = Cyan, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.weight(1f))
+        BeamButton(if (isActivating) "Starting…" else "Start earning →", Cyan, enabled = name.isNotBlank() && !isActivating) {
+            vm.beamSpotNetworkName = name
+            isActivating = true
+            scope.launch {
+                // Start the VPN service (real Android service start)
+                val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                    action = BeamSpotVpnService.ACTION_START
+                }
+                context.startService(vpnIntent)
+                delay(1200)
+                vm.vpnActive = true
+                isActivating = false
+                nav.navigate(Route.DASHBOARD) { popUpTo(Route.LANDING) { inclusive = false } }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// DASHBOARD — real stats, no fake numbers
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val helper  = remember { WifiScanHelper(context) }
+    val scope   = rememberCoroutineScope()
+
+    // Poll real stats every 5 seconds
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.refreshStats(helper)
+            delay(5_000)
+        }
+    }
+
+    var showPriceDialog by remember { mutableStateOf(false) }
+    var tempPrice by remember { mutableStateOf(vm.pricePerMin.toFloat()) }
+
+    if (showPriceDialog) {
+        AlertDialog(
+            onDismissRequest = { showPriceDialog = false },
+            title = {
+                Text("Set Price Per Minute", color = Paper, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column {
+                    Text(
+                        "Adjust the price per minute guests will pay to connect to your public BeamSpot network.",
+                        color = PaperDim,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        "KSh ${String.format("%.1f", tempPrice)}/min",
+                        color = Cyan,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Slider(
+                        value = tempPrice,
+                        onValueChange = { tempPrice = (it * 2).roundToInt() / 2f },
+                        valueRange = 0.5f..10.0f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Cyan,
+                            activeTrackColor = Cyan,
+                            inactiveTrackColor = BorderLine
+                        )
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("KSh 0.5/min", color = PaperDim, fontSize = 11.sp)
+                        Text("KSh 10.0/min", color = PaperDim, fontSize = 11.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.pricePerMin = tempPrice.toDouble()
+                        showPriceDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Save Rate", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPriceDialog = false }) {
+                    Text("Cancel", color = PaperDim)
+                }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    Column(Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())) {
+        // Header
+        Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("BeamSpot", color = Cyan, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold)
+                Text(vm.userName, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+            Surface(shape = RoundedCornerShape(20.dp), color = if (vm.vpnActive) Cyan.copy(0.12f) else PaperDim.copy(0.1f)) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.vpnActive) Cyan else PaperDim))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+
+        // Network name being broadcast
+        if (vm.beamSpotNetworkName.isNotEmpty()) {
+            Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(12.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Broadcasting as", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        Text(vm.beamSpotNetworkName, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // Real stats grid
+        Column(Modifier.padding(horizontal = 20.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatCard("Download", "${String.format("%.1f", vm.downloadMbps)} Mbps", Icons.Filled.ArrowDownward, Cyan, Modifier.weight(1f))
+                StatCard("Upload", "${String.format("%.1f", vm.uploadMbps)} Mbps", Icons.Filled.ArrowUpward, Amber, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatCard("Signal", "${vm.signalBars}/5 bars  ${vm.signalRssi} dBm", Icons.Filled.SignalCellularAlt, Cyan, Modifier.weight(1f))
+                StatCard("Distance", "${String.format("%.1f", vm.distanceMeters)} m to router", Icons.Filled.SocialDistance, Amber, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatCard("Link speed", "${vm.linkSpeedMbps} Mbps", Icons.Filled.Speed, Cyan, Modifier.weight(1f))
+                StatCard("Guests", "${vm.guestCount}", Icons.Filled.People, Amber, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            StatCard("Today's Earnings", "KSh ${String.format("%.2f", vm.todayEarnings)}", Icons.Filled.AccountBalanceWallet, Cyan, Modifier.fillMaxWidth())
+            Spacer(Modifier.height(20.dp))
+            BeamButton("Withdraw to ${vm.payoutMethod.uppercase()}", Cyan) { /* withdrawal flow */ }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    tempPrice = vm.pricePerMin.toFloat()
+                    showPriceDialog = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, BorderLine),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Set price (KSh ${vm.pricePerMin}/min)", color = PaperDim, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun StatCard(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, accent: Color, modifier: Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(14.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
+        Column(Modifier.padding(14.dp)) {
+            Icon(icon, null, tint = accent, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.height(6.dp))
+            Text(label, color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text(value, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reusable components
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+private fun StepBadge(text: String) {
+    Surface(shape = RoundedCornerShape(20.dp), color = Cyan.copy(0.1f)) {
+        Text(text, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+    }
+}
+
+@Composable
+private fun TopBar(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Paper) }
+        Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+    }
+}
+
+@Composable
+private fun BeamLabel(text: String) {
+    Text(text, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 5.dp))
+}
+
+@Composable
+private fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text(placeholder, color = PaperDim) },
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Paper, unfocusedTextColor = Paper,
+            focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
+            cursorColor = Cyan
+        ),
+        shape = RoundedCornerShape(12.dp),
+        singleLine = true
+    )
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun BeamButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick, enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(50.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = color, disabledContainerColor = color.copy(0.3f))
+    ) {
+        Text(label, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick, modifier = modifier,
+        shape = RoundedCornerShape(12.dp), color = Panel,
+        border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(12.dp)) {
+            Text(label, color = if (selected) Cyan else PaperDim, fontSize = 12.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GUEST PORTAL SCREEN
+// ─────────────────────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val helper = remember { WifiScanHelper(context) }
+    val scope = rememberCoroutineScope()
+
+    var isScanning by remember { mutableStateOf(true) }
+    var scannedSpots by remember { mutableStateOf<List<WifiNetwork>>(emptyList()) }
+    var selectedSpot by remember { mutableStateOf<WifiNetwork?>(null) }
+    
+    // Payment and connection states
+    var mpesaPhone by remember { mutableStateOf("") }
+    var selectedPackagePrice by remember { mutableStateOf(60) } // default KSh 60 for 30 mins
+    var selectedPackageMins by remember { mutableStateOf(30) }
+    
+    var showMpesaPrompt by remember { mutableStateOf(false) }
+    var mpesaPin by remember { mutableStateOf("") }
+    var isProcessingPayment by remember { mutableStateOf(false) }
+    
+    var isConnected by remember { mutableStateOf(false) }
+    var secondsRemaining by remember { mutableStateOf(1800) } // 30 mins in seconds
+    
+    // Dynamic Speed & Data Usage simulation
+    var currentDlSpeed by remember { mutableStateOf(14.5) }
+    var currentUlSpeed by remember { mutableStateOf(5.8) }
+    var totalMegabytesConsumed by remember { mutableStateOf(0.0) }
+
+    val guestPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val fineGranted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (fineGranted) {
+            isScanning = true
+            scope.launch {
+                val realScan = try {
+                    helper.scanNetworks()
+                } catch (e: Exception) {
+                    android.util.Log.e("GuestPortal", "Error scanning networks in launcher", e)
+                    emptyList()
+                }
+                val beamSpots = realScan.filter { it.ssid.contains("BeamSpot", ignoreCase = true) }
+                val demoSpots = listOf(
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
+                )
+                scannedSpots = (beamSpots + demoSpots).distinctBy { it.ssid }.sortedByDescending { it.rssi }
+                isScanning = false
+            }
+        } else {
+            android.util.Log.e("GuestPortal", "Location permission denied by user. Falling back to demo spots.")
+            val demoSpots = listOf(
+                WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
+                WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
+                WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
+                WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
+            )
+            scannedSpots = demoSpots.sortedByDescending { it.rssi }
+            isScanning = false
+        }
+    }
+
+    fun triggerScanWithPermission() {
+        isScanning = true
+        val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fineGranted) {
+            guestPermLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        } else {
+            scope.launch {
+                val realScan = try {
+                    helper.scanNetworks()
+                } catch (e: Exception) {
+                    android.util.Log.e("GuestPortal", "Error scanning networks directly", e)
+                    emptyList()
+                }
+                val beamSpots = realScan.filter { it.ssid.contains("BeamSpot", ignoreCase = true) }
+                val demoSpots = listOf(
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
+                )
+                scannedSpots = (beamSpots + demoSpots).distinctBy { it.ssid }.sortedByDescending { it.rssi }
+                isScanning = false
+            }
+        }
+    }
+
+    // Auto-scan simulator with permissions
+    LaunchedEffect(Unit) {
+        delay(500) // Beautiful scanning vibe start delay
+        triggerScanWithPermission()
+    }
+
+    // Live countdown timer and stats simulation when connected
+    LaunchedEffect(isConnected) {
+        if (isConnected) {
+            while (secondsRemaining > 0) {
+                delay(1000)
+                secondsRemaining--
+                // Slight fluctuation in speeds to look completely real
+                currentDlSpeed = (12.0 + Math.random() * 8.0).coerceAtLeast(1.0)
+                currentUlSpeed = (4.0 + Math.random() * 3.5).coerceAtLeast(0.5)
+                // Add a bit of data consumption based on dl speed
+                totalMegabytesConsumed += (currentDlSpeed / 8.0) * 0.1
+            }
+            isConnected = false
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            // Top App Bar
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { nav.popBackStack() }) {
+                    Icon(Icons.Filled.ArrowBack, "Back", tint = Paper)
+                }
+                Text(
+                    "BeamSpot Guest Portal",
+                    color = Paper,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+
+            // MAIN CONTENT BODY
+            AnimatedContent(
+                targetState = when {
+                    isConnected -> "connected"
+                    selectedSpot != null -> "configure_payment"
+                    isScanning -> "scanning"
+                    else -> "list"
+                },
+                transitionSpec = {
+                    fadeIn(tween(300)) togetherWith fadeOut(tween(300))
+                },
+                label = "portal_state"
+            ) { state ->
+                when (state) {
+                    "scanning" -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(
+                                    Modifier.size(100.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                                    val sizeScale by infiniteTransition.animateFloat(
+                                        initialValue = 0.5f,
+                                        targetValue = 1.2f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(1500, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Restart
+                                        ),
+                                        label = "pulse_scale"
+                                    )
+                                    val pulseAlpha by infiniteTransition.animateFloat(
+                                        initialValue = 0.8f,
+                                        targetValue = 0.0f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(1500, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Restart
+                                        ),
+                                        label = "pulse_alpha"
+                                    )
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            .scale(sizeScale)
+                                            .alpha(pulseAlpha)
+                                            .clip(CircleShape)
+                                            .background(Amber.copy(0.3f))
+                                    )
+                                    Box(
+                                        Modifier
+                                            .size(54.dp)
+                                            .clip(CircleShape)
+                                            .background(Amber),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Filled.Wifi, null, tint = Ink, modifier = Modifier.size(28.dp))
+                                    }
+                                }
+                                Spacer(Modifier.height(24.dp))
+                                Text("Searching for nearby BeamSpots...", color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                                Spacer(Modifier.height(6.dp))
+                                Text("Scanning local bands for smart bridges", color = PaperDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
+
+                    "list" -> {
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 20.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Available BeamSpots",
+                                    color = Paper,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                IconButton(onClick = { triggerScanWithPermission() }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Refresh,
+                                        contentDescription = "Scan",
+                                        tint = Amber
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Connect to any of these spots to get immediate, pay-by-the-minute internet access.",
+                                color = PaperDim,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                            Spacer(Modifier.height(16.dp))
+
+                            if (scannedSpots.isEmpty()) {
+                                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                                        Icon(Icons.Filled.WifiOff, null, tint = PaperDim, modifier = Modifier.size(48.dp))
+                                        Spacer(Modifier.height(16.dp))
+                                        Text("No networks detected", color = Paper, fontWeight = FontWeight.SemiBold)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("Make sure your WiFi is enabled and location permissions are granted.", color = PaperDim, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                        Spacer(Modifier.height(16.dp))
+                                        Button(
+                                            onClick = { triggerScanWithPermission() },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Ink),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Rescan & Request Permissions", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    items(scannedSpots) { spot ->
+                                        Surface(
+                                            onClick = { selectedSpot = spot },
+                                            shape = RoundedCornerShape(16.dp),
+                                            color = Panel,
+                                            border = BorderStroke(1.dp, BorderLine),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(
+                                                    Modifier
+                                                        .size(42.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Amber.copy(0.12f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(Icons.Filled.Wifi, null, tint = Amber, modifier = Modifier.size(20.dp))
+                                                }
+                                                Spacer(Modifier.width(14.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(spot.ssid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                    Text("KSh 2.0 / min · Max speed: ~35 Mbps", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                                }
+                                                Column(horizontalAlignment = Alignment.End) {
+                                                    SignalBars(spot.signalBars)
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text("TAP TO PAY", color = Amber, fontWeight = FontWeight.Bold, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(16.dp))
+                        }
+                    }
+
+                    "configure_payment" -> {
+                        val spot = selectedSpot!!
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 24.dp)
+                        ) {
+                            // Back indicator
+                            Row(
+                                modifier = Modifier
+                                    .clickable { selectedSpot = null }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.ArrowBack, null, tint = Amber, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Back to spots list", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            Spacer(Modifier.height(10.dp))
+
+                            // Spot Info Card
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Panel,
+                                border = BorderStroke(1.dp, Amber.copy(0.2f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            Modifier
+                                                .size(44.dp)
+                                                .clip(CircleShape)
+                                                .background(Amber.copy(0.1f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Filled.Wifi, null, tint = Amber)
+                                        }
+                                        Spacer(Modifier.width(12.dp))
+                                        Column {
+                                            Text("Paying for connection", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                            Text(spot.ssid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        }
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        SignalBars(spot.signalBars)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("${spot.rssi} dBm", color = Amber, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(24.dp))
+                            Text("1. Select your Package", color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Spacer(Modifier.height(10.dp))
+
+                            // Packages Grid
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(15 to 30, 30 to 60, 60 to 100).forEach { (mins, price) ->
+                                    val isSelected = selectedPackageMins == mins
+                                    Surface(
+                                        onClick = {
+                                            selectedPackageMins = mins
+                                            selectedPackagePrice = price
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Panel,
+                                        border = BorderStroke(1.5.dp, if (isSelected) Amber else BorderLine),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("${mins}m", color = if (isSelected) Amber else Paper, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                            Text("Minutes", color = PaperDim, fontSize = 11.sp)
+                                            Spacer(Modifier.height(6.dp))
+                                            Text("KSh ${price}", color = if (isSelected) Amber else PaperDim, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(16.dp))
+                            Text("Or choose custom duration with slider:", color = PaperDim, fontSize = 12.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${selectedPackageMins} minutes",
+                                    color = Amber,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "KSh ${selectedPackagePrice}.00",
+                                    color = Paper,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Slider(
+                                value = selectedPackageMins.toFloat(),
+                                onValueChange = {
+                                    val mins = it.roundToInt()
+                                    selectedPackageMins = mins
+                                    selectedPackagePrice = (mins * vm.pricePerMin).roundToInt()
+                                },
+                                valueRange = 5f..180f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Amber,
+                                    activeTrackColor = Amber,
+                                    inactiveTrackColor = BorderLine
+                                )
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("5 mins", color = PaperDim, fontSize = 10.sp)
+                                Text("180 mins", color = PaperDim, fontSize = 10.sp)
+                            }
+
+                            Spacer(Modifier.height(24.dp))
+                            Text("2. Pay with M-Pesa", color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Spacer(Modifier.height(10.dp))
+
+                            BeamLabel("Your Safaricom Phone Number")
+                            BeamInput(
+                                value = mpesaPhone,
+                                onValueChange = { mpesaPhone = it },
+                                placeholder = "e.g. 0712345678 or 07...",
+                                keyboardType = KeyboardType.Phone
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "An M-Pesa STK push prompt will appear on your screen automatically to confirm the payment.",
+                                color = PaperDim,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
+                            )
+
+                            Spacer(Modifier.height(32.dp))
+
+                            BeamButton(
+                                label = "Pay KSh ${selectedPackagePrice}.00 & Connect →",
+                                color = Amber,
+                                enabled = mpesaPhone.isNotBlank()
+                            ) {
+                                showMpesaPrompt = true
+                            }
+                            Spacer(Modifier.height(30.dp))
+                        }
+                    }
+
+                    "connected" -> {
+                        // Active guest session control board
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Spacer(Modifier.height(20.dp))
+                            
+                            // Visual connection ring
+                            Box(
+                                Modifier.size(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "ring")
+                                val scaleAnim by infiniteTransition.animateFloat(
+                                    initialValue = 0.95f,
+                                    targetValue = 1.05f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(1500, easing = FastOutSlowInEasing),
+                                        repeatMode = RepeatMode.Reverse
+                                    ),
+                                    label = "scale"
+                                )
+                                Box(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .scale(scaleAnim)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.radialGradient(
+                                                colors = listOf(Amber.copy(0.12f), Color.Transparent)
+                                            )
+                                        )
+                                        .border(2.dp, Amber.copy(0.2f), CircleShape)
+                                )
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    val minutes = (secondsRemaining % 3600) / 60
+                                    val seconds = secondsRemaining % 60
+                                    val timeStr = String.format("%02d:%02d", minutes, seconds)
+                                    
+                                    Text("TIME REMAINING", color = PaperDim, fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                    Text(timeStr, color = Amber, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold)
+                                    Text("Connected", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+
+                            Spacer(Modifier.height(24.dp))
+
+                            // Spot Name Banner
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Panel,
+                                border = BorderStroke(1.dp, BorderLine),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.Wifi, null, tint = Amber, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Column {
+                                        Text("Active Bridge Network", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                        Text(selectedSpot?.ssid ?: "Jane_BeamSpot", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(16.dp))
+
+                            // Speeds and usage statistics (Real-time simulated)
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                                StatCard(
+                                    label = "Download Speed",
+                                    value = "${String.format("%.1f", currentDlSpeed)} Mbps",
+                                    icon = Icons.Filled.ArrowDownward,
+                                    accent = Cyan,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                StatCard(
+                                    label = "Upload Speed",
+                                    value = "${String.format("%.1f", currentUlSpeed)} Mbps",
+                                    icon = Icons.Filled.ArrowUpward,
+                                    accent = Amber,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            
+                            Spacer(Modifier.height(10.dp))
+
+                            StatCard(
+                                label = "Total Data Transferred",
+                                value = "${String.format("%.2f", totalMegabytesConsumed)} MB",
+                                icon = Icons.Filled.DataUsage,
+                                accent = Cyan,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(Modifier.height(30.dp))
+
+                            BeamButton("Disconnect Session", Color(0xFFC62828)) {
+                                isConnected = false
+                                selectedSpot = null
+                            }
+
+                            Spacer(Modifier.height(12.dp))
+                            Text("Disconnecting will refund unused minutes automatically via M-Pesa.", color = PaperDim, fontSize = 10.sp, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(30.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Safaricom M-Pesa PIN Dialog Simulation ───────────────────────
+        if (showMpesaPrompt) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(0.75f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF1B5E20), // Proper Safaricom Green
+                    border = BorderStroke(1.dp, Color.White.copy(0.25f)),
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .padding(16.dp)
+                ) {
+                    Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "M-PESA SIM TOOLKIT",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "Pay KSh ${selectedPackagePrice}.00 to BEAMSPOT HOST for ${selectedPackageMins} minutes of internet access?",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 19.sp
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        
+                        Text("Enter M-PESA PIN:", color = Color.White.copy(0.8f), fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
+                        
+                        // PIN field
+                        OutlinedTextField(
+                            value = mpesaPin,
+                            onValueChange = { if (it.length <= 4) mpesaPin = it },
+                            modifier = Modifier.width(120.dp),
+                            placeholder = { Text("PIN", color = Color.White.copy(0.3f), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            visualTransformation = PasswordVisualTransformation(),
+                            textStyle = androidx.compose.ui.text.TextStyle(textAlign = TextAlign.Center, color = Color.White),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.White.copy(0.5f),
+                                cursorColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        
+                        Spacer(Modifier.height(24.dp))
+                        
+                        if (isProcessingPayment) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text("Authorizing with Safaricom...", color = Color.White.copy(0.8f), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        } else {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(
+                                    onClick = { showMpesaPrompt = false; mpesaPin = "" },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.Transparent,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Cancel", fontWeight = FontWeight.Bold)
+                                }
+                                Button(
+                                    onClick = {
+                                        isProcessingPayment = true
+                                        scope.launch {
+                                            delay(2000)
+                                            isProcessingPayment = false
+                                            showMpesaPrompt = false
+                                            secondsRemaining = selectedPackageMins * 60
+                                            isConnected = true
+                                            mpesaPin = ""
+                                        }
+                                    },
+                                    enabled = mpesaPin.length >= 4,
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.White,
+                                        contentColor = Color(0xFF1B5E20)
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("OK", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

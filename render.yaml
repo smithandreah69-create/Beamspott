@@ -1,0 +1,5 @@
+services:
+  - type: web
+    name: beamspot-landing
+    env: static
+    staticPublishPath: ./public

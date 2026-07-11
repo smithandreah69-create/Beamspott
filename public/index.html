@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeamSpot - Peer-to-Peer Paid Wi-Fi Hotspots</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ink: '#0D0E11',
+                        panel: '#181A20',
+                        borderline: '#282C37',
+                        paper: '#F5F7FA',
+                        paperdim: '#8E9AA8',
+                        amberAccent: '#FFA000',
+                        cyanAccent: '#00D5FF',
+                        darkGreen: '#1B5E20'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0D0E11;
+        }
+        .glow-cyan {
+            box-shadow: 0 0 25px rgba(0, 213, 255, 0.15);
+        }
+        .glow-amber {
+            box-shadow: 0 0 25px rgba(255, 160, 0, 0.15);
+        }
+        .font-mono-custom {
+            font-family: 'JetBrains Mono', monospace;
+        }
+    </style>
+</head>
+<body class="text-paper selection:bg-cyanAccent selection:text-ink min-h-screen flex flex-col">
+
+    <!-- Navigation Header -->
+    <header class="border-b border-borderline/80 bg-ink/95 sticky top-0 z-50 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amberAccent to-cyanAccent p-[2px] flex items-center justify-center shadow-lg">
+                    <div class="w-full h-full bg-ink rounded-[10px] flex items-center justify-center">
+                        <svg class="w-5 h-5 text-amberAccent" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 21v-4.875c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125V21m0 0h4.5V3.545M2.25 21h1.5m18 0h-18M2.25 9l4.5-1.636M18.75 3l-1.5.545m0 6.205l3 1m1.5-1.5l-3-1m-5.01 4.757l-.707-.707m3.182-3.182l-.707-.707M6.75 12v.008h-.008v-.008h.008zm0-.375a.375.375 0 100 .75.375.375 0 000-.75zM14.25 10.5V12M12 14.25V18M12 9.75V10.5M11.25 12h1.5m-1.5 2.25h1.5" />
+                        </svg>
+                    </div>
+                </div>
+                <span class="text-xl font-bold tracking-tight bg-gradient-to-r from-paper to-paperdim bg-clip-text text-transparent">BeamSpot</span>
+            </div>
+            <nav class="hidden md:flex items-center space-x-8 text-sm font-medium text-paperdim">
+                <a href="#how-it-works" class="hover:text-cyanAccent transition-colors">How it Works</a>
+                <a href="#calculator" class="hover:text-amberAccent transition-colors">Earnings Calculator</a>
+                <a href="#security" class="hover:text-cyanAccent transition-colors">Security</a>
+            </nav>
+            <div>
+                <a href="#download" class="px-5 py-2.5 rounded-xl text-xs font-bold bg-amberAccent text-ink hover:bg-amberAccent/90 transition-all shadow-md flex items-center space-x-2">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.53c-.26-.81-1-1.4-1.9-1.4h-1v-3c0-.55-.45-1-1-1h-6v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                    <span>Download APK</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <main class="flex-grow">
+        <section class="relative overflow-hidden py-20 px-6">
+            <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-cyanAccent/5 via-ink/0 to-ink/0 pointer-events-none"></div>
+            
+            <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+                <!-- Left Content -->
+                <div class="lg:col-span-7 space-y-8">
+                    <div class="inline-flex items-center space-x-2 px-3 py-1 bg-cyanAccent/10 border border-cyanAccent/20 rounded-full text-xs font-semibold text-cyanAccent tracking-wide">
+                        <span class="w-2 h-2 rounded-full bg-cyanAccent animate-pulse"></span>
+                        <span>Peer-to-Peer Internet Marketplace</span>
+                    </div>
+                    
+                    <h1 class="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-none text-white">
+                        Share Your Internet.<br>
+                        <span class="bg-gradient-to-r from-amberAccent to-cyanAccent bg-clip-text text-transparent">Earn Real Cash.</span>
+                    </h1>
+                    
+                    <p class="text-lg text-paperdim leading-relaxed max-w-2xl">
+                        Turn your static home fiber or cellular Wi-Fi into a money-making public hotspot. 
+                        Guests connect instantly without complex setup, pay securely per minute via 
+                        <strong>M-Pesa</strong>, and you earn passive income.
+                    </p>
+                    
+                    <div class="flex flex-wrap gap-4 pt-2">
+                        <a href="#calculator" class="px-7 py-3.5 bg-cyanAccent text-ink hover:bg-cyanAccent/90 font-bold rounded-xl shadow-lg transition-all flex items-center space-x-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                            <span>Calculate Your Earnings</span>
+                        </a>
+                        <a href="#how-it-works" class="px-7 py-3.5 bg-panel border border-borderline hover:bg-borderline/30 font-semibold rounded-xl transition-all">
+                            Learn How it Works
+                        </a>
+                    </div>
+
+                    <!-- App Stats Summary -->
+                    <div class="grid grid-cols-3 gap-6 pt-6 border-t border-borderline/50">
+                        <div>
+                            <p class="text-2xl sm:text-3xl font-extrabold text-white font-mono-custom">0</p>
+                            <p class="text-xs text-paperdim uppercase tracking-wider font-semibold">Passwords Needed</p>
+                        </div>
+                        <div>
+                            <p class="text-2xl sm:text-3xl font-extrabold text-amberAccent font-mono-custom">100%</p>
+                            <p class="text-xs text-paperdim uppercase tracking-wider font-semibold">M-Pesa Integrated</p>
+                        </div>
+                        <div>
+                            <p class="text-2xl sm:text-3xl font-extrabold text-cyanAccent font-mono-custom">&lt; 10s</p>
+                            <p class="text-xs text-paperdim uppercase tracking-wider font-semibold">Instant Connection</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Mockup Graphics -->
+                <div class="lg:col-span-5 flex justify-center">
+                    <div class="relative w-full max-w-[340px] h-[550px] bg-[#12141C] border-4 border-borderline rounded-[36px] overflow-hidden shadow-2xl p-4 flex flex-col justify-between glow-cyan">
+                        <!-- Top Speaker / Notch -->
+                        <div class="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4 bg-ink rounded-full flex items-center justify-center">
+                            <span class="w-12 h-1 bg-borderline rounded-full"></span>
+                        </div>
+
+                        <!-- Inner Screen Simulation -->
+                        <div class="flex-grow mt-4 flex flex-col justify-between pt-4">
+                            <!-- Header Info -->
+                            <div class="flex justify-between items-center px-2 py-1">
+                                <span class="text-[10px] font-mono-custom text-cyanAccent">BEAMSPOT APP</span>
+                                <div class="flex items-center space-x-1">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    <span class="text-[9px] text-emerald-500 font-semibold font-mono-custom">ACTIVE HOST</span>
+                                </div>
+                            </div>
+
+                            <!-- Mockup Content: Earnings Panel -->
+                            <div class="bg-panel border border-borderline p-4 rounded-2xl space-y-3 my-auto">
+                                <div class="flex justify-between items-center border-b border-borderline pb-2">
+                                    <div>
+                                        <p class="text-[10px] text-paperdim uppercase tracking-wide">Wallet Balance</p>
+                                        <p class="text-lg font-bold text-white font-mono-custom">KSh 3,450.00</p>
+                                    </div>
+                                    <span class="px-2 py-1 bg-cyanAccent/10 text-cyanAccent text-[9px] font-bold rounded-lg font-mono-custom">MPESA</span>
+                                </div>
+                                <div class="space-y-1">
+                                    <div class="flex justify-between text-[11px]">
+                                        <span class="text-paperdim">Price per Minute:</span>
+                                        <span class="text-white font-semibold">KSh 2.0</span>
+                                    </div>
+                                    <div class="flex justify-between text-[11px]">
+                                        <span class="text-paperdim">Active Guests Connected:</span>
+                                        <span class="text-amberAccent font-bold">5 Guests</span>
+                                    </div>
+                                </div>
+                                <div class="w-full bg-cyanAccent text-ink text-center py-2 rounded-xl text-xs font-bold shadow-md cursor-pointer hover:opacity-95 transition-opacity">
+                                    Withdraw Earnings
+                                </div>
+                            </div>
+
+                            <!-- Mini Network List View -->
+                            <div class="bg-panel/50 border border-borderline/60 p-3 rounded-2xl space-y-2 mt-auto">
+                                <p class="text-[10px] text-paperdim font-semibold tracking-wider font-mono-custom">Available Spots Nearby</p>
+                                <div class="flex justify-between items-center text-xs bg-ink/60 px-2 py-1.5 rounded-lg border border-borderline/40">
+                                    <div class="flex items-center space-x-2">
+                                        <svg class="w-3.5 h-3.5 text-amberAccent" fill="currentColor" viewBox="0 0 24 24"><path d="M12 21l-12-18h24z"/></svg>
+                                        <span class="font-bold text-xs">Jane_BeamSpot</span>
+                                    </div>
+                                    <span class="text-[9px] font-bold text-amberAccent font-mono-custom">KSh 2/min</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dynamic Earnings Calculator -->
+        <section id="calculator" class="py-20 bg-panel border-y border-borderline/80 px-6">
+            <div class="max-w-4xl mx-auto">
+                <div class="text-center space-y-4 mb-14">
+                    <span class="text-xs font-bold tracking-widest text-amberAccent uppercase font-mono-custom">REVENUE SIMULATOR</span>
+                    <h2 class="text-3xl sm:text-4xl font-extrabold text-white">How much can you earn with BeamSpot?</h2>
+                    <p class="text-sm sm:text-base text-paperdim max-w-2xl mx-auto">
+                        Adjust the sliders below to see your potential daily, weekly, and monthly payouts directly in Kenya Shillings (KSh).
+                    </p>
+                </div>
+
+                <!-- Calculator Body -->
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-10 bg-ink border border-borderline p-8 rounded-3xl glow-amber items-center">
+                    <!-- Controls (7 cols) -->
+                    <div class="md:col-span-7 space-y-6">
+                        <!-- Guest count -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-center">
+                                <label class="text-sm font-semibold text-paperdim">Average Concurrent Guests</label>
+                                <span class="text-lg font-extrabold text-amberAccent font-mono-custom" id="val-guests">10</span>
+                            </div>
+                            <input type="range" id="slider-guests" min="1" max="50" value="10" class="w-full accent-amberAccent bg-borderline h-2 rounded-lg cursor-pointer">
+                            <div class="flex justify-between text-[10px] text-paperdim">
+                                <span>1 guest</span>
+                                <span>50 guests</span>
+                            </div>
+                        </div>
+
+                        <!-- Average Hours connected per day -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-center">
+                                <label class="text-sm font-semibold text-paperdim">Average Connection Hours per Day</label>
+                                <span class="text-lg font-extrabold text-amberAccent font-mono-custom" id="val-hours">4 hrs</span>
+                            </div>
+                            <input type="range" id="slider-hours" min="1" max="24" value="4" class="w-full accent-amberAccent bg-borderline h-2 rounded-lg cursor-pointer">
+                            <div class="flex justify-between text-[10px] text-paperdim">
+                                <span>1 hour</span>
+                                <span>24 hours</span>
+                            </div>
+                        </div>
+
+                        <!-- Price Rate Slider -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-center">
+                                <label class="text-sm font-semibold text-paperdim">Price Rate per Minute</label>
+                                <span class="text-lg font-extrabold text-cyanAccent font-mono-custom" id="val-rate">KSh 2.0</span>
+                            </div>
+                            <input type="range" id="slider-rate" min="0.5" max="10" step="0.5" value="2.0" class="w-full accent-cyanAccent bg-borderline h-2 rounded-lg cursor-pointer">
+                            <div class="flex justify-between text-[10px] text-paperdim">
+                                <span>KSh 0.5/min</span>
+                                <span>KSh 10/min</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Results Output (5 cols) -->
+                    <div class="md:col-span-5 bg-panel border border-borderline p-6 rounded-2xl flex flex-col justify-center space-y-4 text-center">
+                        <div>
+                            <p class="text-xs uppercase tracking-wider text-paperdim font-semibold">Estimated Monthly Earnings</p>
+                            <p class="text-4xl sm:text-5xl font-extrabold text-white mt-1 bg-gradient-to-r from-amberAccent to-cyanAccent bg-clip-text text-transparent font-mono-custom" id="calc-monthly">KSh 144,000</p>
+                        </div>
+                        <div class="border-t border-borderline/80 pt-4 space-y-2 text-xs">
+                            <div class="flex justify-between text-paperdim">
+                                <span>Daily Revenue:</span>
+                                <span class="text-white font-bold font-mono-custom" id="calc-daily">KSh 4,800</span>
+                            </div>
+                            <div class="flex justify-between text-paperdim">
+                                <span>Weekly Revenue:</span>
+                                <span class="text-white font-bold font-mono-custom" id="calc-weekly">KSh 33,600</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- How It Works Section -->
+        <section id="how-it-works" class="py-20 px-6">
+            <div class="max-w-7xl mx-auto space-y-16">
+                <div class="text-center space-y-4">
+                    <span class="text-xs font-bold tracking-widest text-cyanAccent uppercase font-mono-custom">SYSTEM OPERATIONAL DESIGN</span>
+                    <h2 class="text-3xl sm:text-4xl font-extrabold text-white">How BeamSpot Works</h2>
+                    <p class="text-sm sm:text-base text-paperdim max-w-2xl mx-auto">
+                        A seamless peer-to-peer ecosystem keeping hosts paid and guests connected with absolutely zero friction.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
+                    <!-- Column: Hosts -->
+                    <div class="bg-panel border border-borderline/70 p-8 rounded-3xl space-y-6 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+                            <svg class="w-32 h-32 text-amberAccent" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                        </div>
+                        <div class="inline-flex p-3 bg-amberAccent/10 border border-amberAccent/20 rounded-2xl text-amberAccent">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                        </div>
+                        <h3 class="text-2xl font-bold text-white">For Hotspot Hosts</h3>
+                        
+                        <div class="space-y-4">
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-amberAccent/10 text-amberAccent border border-amberAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">1</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Enable Your Hotspot:</strong> Set your Wi-Fi SSID suffix to <code class="font-mono-custom text-amberAccent px-1.5 py-0.5 bg-ink border border-borderline rounded text-xs">_BeamSpot</code>.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-amberAccent/10 text-amberAccent border border-amberAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">2</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Set Your Rate:</strong> Use the interactive pricing slider inside the Host Portal to change the rate per minute instantly.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-amberAccent/10 text-amberAccent border border-amberAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">3</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Collect Revenue:</strong> Guests pay directly through M-Pesa. Balance registers in your app wallet immediately.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-amberAccent/10 text-amberAccent border border-amberAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">4</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Instant Withdrawal:</strong> Request mobile money payouts to your phone number at any time with zero hassle.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Column: Guests -->
+                    <div class="bg-panel border border-borderline/70 p-8 rounded-3xl space-y-6 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+                            <svg class="w-32 h-32 text-cyanAccent" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                        </div>
+                        <div class="inline-flex p-3 bg-cyanAccent/10 border border-cyanAccent/20 rounded-2xl text-cyanAccent">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4"/></svg>
+                        </div>
+                        <h3 class="text-2xl font-bold text-white">For Bandwidth Guests</h3>
+                        
+                        <div class="space-y-4">
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">1</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Discover Spots:</strong> Open the BeamSpot application to scan nearby networks automatically. Strongest signals show up first.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">2</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Configure Package:</strong> Select standard packages (5 mins, 30 mins) or use the minute-slider to match your exact needs.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">3</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Instant M-Pesa Payment:</strong> Approve the secure payment overlay. No credit card or registration required.</p>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <span class="w-6 h-6 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-full flex items-center justify-center text-xs font-bold font-mono-custom mt-0.5">4</span>
+                                <p class="text-sm text-paperdim"><strong class="text-white">Enjoy Active Access:</strong> System launches a secure VPN portal that maintains connectivity with visual timer alerts.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Security Section -->
+        <section id="security" class="py-20 bg-panel border-y border-borderline/80 px-6">
+            <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+                <div class="lg:col-span-5 space-y-6">
+                    <span class="text-xs font-bold tracking-widest text-cyanAccent uppercase font-mono-custom">MILITARY GRADE SAFETY</span>
+                    <h2 class="text-3xl sm:text-4xl font-extrabold text-white">How We Secure Your Shared Network</h2>
+                    <p class="text-sm sm:text-base text-paperdim leading-relaxed">
+                        Security is our absolute priority. We insulate hosts' private networks from guest connections to ensure total safety and compliance.
+                    </p>
+                    <div class="space-y-4 pt-2">
+                        <div class="flex items-start space-x-3">
+                            <div class="p-1 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-lg mt-0.5">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            </div>
+                            <p class="text-sm text-paperdim"><strong class="text-white">Client Sandbox Isolation:</strong> Guests have absolutely zero visibility or contact with other local IP devices on your router.</p>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <div class="p-1 bg-cyanAccent/10 text-cyanAccent border border-cyanAccent/20 rounded-lg mt-0.5">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            </div>
+                            <p class="text-sm text-paperdim"><strong class="text-white">Dynamic Speed Throttling:</strong> Allocates a smooth segment of your bandwidth so your home devices remain incredibly fast.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <!-- Feature card 1 -->
+                    <div class="bg-ink border border-borderline p-6 rounded-2xl space-y-3">
+                        <h4 class="text-lg font-bold text-white">VPN Sandboxing</h4>
+                        <p class="text-xs text-paperdim leading-relaxed">
+                            App implements a secure local Android VPN layer to filter and control outbound traffic metrics, preventing guests from tampering with home systems.
+                        </p>
+                    </div>
+                    <!-- Feature card 2 -->
+                    <div class="bg-ink border border-borderline p-6 rounded-2xl space-y-3">
+                        <h4 class="text-lg font-bold text-white">Auto-Disconnect</h4>
+                        <p class="text-xs text-paperdim leading-relaxed">
+                            Once your paid time limit triggers, the local access portal instantly revokes connections automatically, protecting your margins.
+                        </p>
+                    </div>
+                    <!-- Feature card 3 -->
+                    <div class="bg-ink border border-borderline p-6 rounded-2xl space-y-3">
+                        <h4 class="text-lg font-bold text-white">Encrypted Handshakes</h4>
+                        <p class="text-xs text-paperdim leading-relaxed">
+                            Payment references, wallet updates, and routing authentication flows are fully encrypted, securing transaction records.
+                        </p>
+                    </div>
+                    <!-- Feature card 4 -->
+                    <div class="bg-ink border border-borderline p-6 rounded-2xl space-y-3">
+                        <h4 class="text-lg font-bold text-white">Zero Log Policy</h4>
+                        <p class="text-xs text-paperdim leading-relaxed">
+                            We value strict privacy constraints. No logging or inspection of client content traffic metrics occurs at any point.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Call to Action Section -->
+        <section id="download" class="py-24 px-6 text-center relative overflow-hidden">
+            <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom,_var(--tw-gradient-stops))] from-amberAccent/5 via-ink/0 to-ink/0 pointer-events-none"></div>
+            <div class="max-w-4xl mx-auto space-y-8">
+                <h2 class="text-4xl sm:text-5xl font-extrabold text-white">Ready to begin sharing and earning?</h2>
+                <p class="text-base sm:text-lg text-paperdim max-w-2xl mx-auto">
+                    Download the latest Android installation bundle (APK) to turn your device into a money-making portal or connect to nearby hotspots today.
+                </p>
+                <div class="flex justify-center">
+                    <a href="#" class="px-8 py-4 bg-amberAccent text-ink font-bold rounded-xl shadow-lg hover:bg-amberAccent/90 transition-all flex items-center space-x-3 text-lg">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+                        <span>Download Android APK</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-borderline/80 bg-ink py-12 px-6">
+        <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6 text-xs text-paperdim">
+            <div class="flex items-center space-x-2">
+                <span class="font-bold text-white font-mono-custom tracking-wider">BEAMSPOT</span>
+                <span>&copy; 2026. All Rights Reserved.</span>
+            </div>
+            <div class="flex space-x-6">
+                <a href="#how-it-works" class="hover:text-cyanAccent transition-colors">How it Works</a>
+                <a href="#calculator" class="hover:text-amberAccent transition-colors">Earnings Calculator</a>
+                <a href="#security" class="hover:text-cyanAccent transition-colors">Security Rules</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Interactive Earnings Calculator Code -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const sliderGuests = document.getElementById('slider-guests');
+            const sliderHours = document.getElementById('slider-hours');
+            const sliderRate = document.getElementById('slider-rate');
+
+            const valGuests = document.getElementById('val-guests');
+            const valHours = document.getElementById('val-hours');
+            const valRate = document.getElementById('val-rate');
+
+            const calcDaily = document.getElementById('calc-daily');
+            const calcWeekly = document.getElementById('calc-weekly');
+            const calcMonthly = document.getElementById('calc-monthly');
+
+            function calculateEarnings() {
+                const guests = parseInt(sliderGuests.value);
+                const hours = parseInt(sliderHours.value);
+                const rate = parseFloat(sliderRate.value);
+
+                // Update labels
+                valGuests.textContent = guests;
+                valHours.textContent = hours + ' hrs';
+                valRate.textContent = 'KSh ' + rate.toFixed(1);
+
+                // Earnings math: guests * hours * 60 minutes * rate_per_minute
+                const dailyEarn = guests * hours * 60 * rate;
+                const weeklyEarn = dailyEarn * 7;
+                const monthlyEarn = dailyEarn * 30;
+
+                // Format numbers with commas
+                calcDaily.textContent = 'KSh ' + dailyEarn.toLocaleString(undefined, { maximumFractionDigits: 0 });
+                calcWeekly.textContent = 'KSh ' + weeklyEarn.toLocaleString(undefined, { maximumFractionDigits: 0 });
+                calcMonthly.textContent = 'KSh ' + monthlyEarn.toLocaleString(undefined, { maximumFractionDigits: 0 });
+            }
+
+            // Bind listeners
+            sliderGuests.addEventListener('input', calculateEarnings);
+            sliderHours.addEventListener('input', calculateEarnings);
+            sliderRate.addEventListener('input', calculateEarnings);
+
+            // Run initial calculation
+            calculateEarnings();
+        });
+    </script>
+</body>
+</html>
