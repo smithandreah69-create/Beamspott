@@ -117,6 +117,16 @@ class AppViewModel : ViewModel() {
             linkSpeedMbps  = stats.linkSpeedMbps
             distanceMeters = stats.distanceMeters
             connectedSsid  = stats.ssid
+
+            if (RetrofitClient.getToken() != null) {
+                try {
+                    val hostStats = RetrofitClient.apiService.getHostStats()
+                    guestCount = hostStats.activeGuests
+                    todayEarnings = hostStats.earningsToday
+                } catch (e: Exception) {
+                    android.util.Log.e("AppViewModel", "Failed to refresh host stats from backend", e)
+                }
+            }
         }
     }
 }
@@ -290,6 +300,7 @@ private fun LandingCard(title: String, subtitle: String, accentColor: Color, ico
 @Composable
 fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
 
@@ -297,16 +308,32 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        isLoading = false
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            // Real user identity from Google
-            vm.userName   = account.displayName ?: account.email?.substringBefore('@') ?: "Host"
-            vm.userEmail  = account.email ?: ""
-            vm.isSignedIn = true
-            nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
+            val idToken = account.idToken
+            if (idToken != null) {
+                isLoading = true
+                scope.launch {
+                    try {
+                        val response = RetrofitClient.apiService.verifyGoogleIdToken(GoogleAuthRequest(idToken))
+                        RetrofitClient.setToken(response.token)
+                        vm.userName   = response.user.name
+                        vm.userEmail  = response.user.email
+                        vm.isSignedIn = true
+                        isLoading = false
+                        nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
+                    } catch (ex: Exception) {
+                        android.util.Log.e("BeamSpot_SignIn", "Backend verification failed with Google idToken", ex)
+                        errorMessage = "Backend verification failed: ${ex.localizedMessage ?: "Unknown error"}. Check your backend server."
+                        isLoading = false
+                    }
+                }
+            } else {
+                errorMessage = "Google ID token was null. Cannot verify with backend."
+            }
         } catch (e: ApiException) {
+            isLoading = false
             android.util.Log.e("BeamSpot_SignIn", "Google Sign-In ApiException caught! Type: ${e.javaClass.name}, StatusCode: ${e.statusCode}, Message: ${e.message}", e)
             if (e.statusCode == 10) {
                 errorMessage = "Google Sign-In failed (Code 10: Developer Error). This occurs in preview/emulator environments when the SHA-1 certificate fingerprint is not registered in Google Cloud. Click the Demo button below to bypass and continue testing!"
@@ -384,40 +411,42 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        if (BuildConfig.DEBUG) {
+            Spacer(Modifier.height(18.dp))
 
-        // OR Divider
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
-            Text("OR", color = PaperDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp), fontFamily = FontFamily.Monospace)
-            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
-        }
-
-        Spacer(Modifier.height(18.dp))
-
-        // Demo Bypass Button
-        Button(
-            onClick = { proceedAsDemoHost() },
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Panel,
-                contentColor = Cyan
-            ),
-            border = BorderStroke(1.dp, Cyan.copy(0.4f)),
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Settings, null, tint = Cyan, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(10.dp))
-                Text("Continue with Demo Account (Bypass)", color = Cyan, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            // OR Divider
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HorizontalDivider(Modifier.weight(1f), color = BorderLine)
+                Text("OR", color = PaperDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp), fontFamily = FontFamily.Monospace)
+                HorizontalDivider(Modifier.weight(1f), color = BorderLine)
             }
-        }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Google login is recommended for real hosts.\nDemo Mode lets you preview the experience without setting up GCP.", color = PaperDim, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 16.sp)
+            Spacer(Modifier.height(18.dp))
+
+            // Demo Bypass Button
+            Button(
+                onClick = { proceedAsDemoHost() },
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Panel,
+                    contentColor = Cyan
+                ),
+                border = BorderStroke(1.dp, Cyan.copy(0.4f)),
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Settings, null, tint = Cyan, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Continue with Demo Account (Bypass)", color = Cyan, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text("Google login is recommended for real hosts.\nDemo Mode lets you preview the experience without setting up GCP.", color = PaperDim, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 16.sp)
+        }
         Spacer(Modifier.weight(1f))
     }
 }
@@ -1161,6 +1190,53 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
     var currentUlSpeed by remember { mutableStateOf(5.8) }
     var totalMegabytesConsumed by remember { mutableStateOf(0.0) }
 
+    suspend fun verifyScannedNetworks(realScan: List<WifiNetwork>): List<WifiNetwork> {
+        val req = NetworkVerifyRequest(realScan.map { ScannedNetwork(it.ssid, it.bssid) })
+        return try {
+            val resp = RetrofitClient.apiService.verifyNetworks(req)
+            val verifiedSpots = resp.verified.map { vn ->
+                val correspondingReal = realScan.find { it.bssid.equals(vn.bssid, ignoreCase = true) }
+                WifiNetwork(
+                    ssid = vn.display_name,
+                    bssid = vn.bssid,
+                    rssi = correspondingReal?.rssi ?: -60,
+                    signalBars = correspondingReal?.signalBars ?: 4,
+                    frequencyMhz = correspondingReal?.frequencyMhz ?: 2412,
+                    isSecured = correspondingReal?.isSecured ?: (vn.connection_type != "OPEN"),
+                    capabilities = correspondingReal?.capabilities ?: "[]",
+                    isVerified = true,
+                    listingId = vn.id,
+                    pricePerMin = vn.price_per_min,
+                    hostName = vn.host_name,
+                    activeGuests = vn.active_guests
+                )
+            }
+            val demoSpots = if (BuildConfig.DEBUG) {
+                listOf(
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 1, pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 2, pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 3, pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = 4, pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
+                )
+            } else {
+                emptyList()
+            }
+            (verifiedSpots + demoSpots).distinctBy { it.bssid }.sortedByDescending { it.rssi }
+        } catch (e: Exception) {
+            android.util.Log.e("GuestPortal", "API verifyNetworks call failed", e)
+            if (BuildConfig.DEBUG) {
+                listOf(
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 1, pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 2, pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 3, pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = 4, pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
+                ).sortedByDescending { it.rssi }
+            } else {
+                emptyList()
+            }
+        }
+    }
+
     val guestPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
@@ -1174,26 +1250,15 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                     android.util.Log.e("GuestPortal", "Error scanning networks in launcher", e)
                     emptyList()
                 }
-                val beamSpots = realScan.filter { it.ssid.contains("BeamSpot", ignoreCase = true) }
-                val demoSpots = listOf(
-                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
-                )
-                scannedSpots = (beamSpots + demoSpots).distinctBy { it.ssid }.sortedByDescending { it.rssi }
+                scannedSpots = verifyScannedNetworks(realScan)
                 isScanning = false
             }
         } else {
-            android.util.Log.e("GuestPortal", "Location permission denied by user. Falling back to demo spots.")
-            val demoSpots = listOf(
-                WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
-                WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
-                WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
-                WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
-            )
-            scannedSpots = demoSpots.sortedByDescending { it.rssi }
-            isScanning = false
+            android.util.Log.e("GuestPortal", "Location permission denied by user. Falling back to demo spots if in debug.")
+            scope.launch {
+                scannedSpots = verifyScannedNetworks(emptyList())
+                isScanning = false
+            }
         }
     }
 
@@ -1213,14 +1278,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                     android.util.Log.e("GuestPortal", "Error scanning networks directly", e)
                     emptyList()
                 }
-                val beamSpots = realScan.filter { it.ssid.contains("BeamSpot", ignoreCase = true) }
-                val demoSpots = listOf(
-                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]"),
-                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]")
-                )
-                scannedSpots = (beamSpots + demoSpots).distinctBy { it.ssid }.sortedByDescending { it.rssi }
+                scannedSpots = verifyScannedNetworks(realScan)
                 isScanning = false
             }
         }
@@ -1419,7 +1477,9 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                                 Spacer(Modifier.width(14.dp))
                                                 Column(Modifier.weight(1f)) {
                                                     Text(spot.ssid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                                    Text("KSh 2.0 / min · Max speed: ~35 Mbps", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                                    val priceStr = if (spot.isVerified) "KSh ${spot.pricePerMin}/min" else "KSh 2.0/min"
+                                                    val hostStr = if (spot.isVerified && spot.hostName.isNotBlank()) " · Host: ${spot.hostName}" else ""
+                                                    Text("$priceStr$hostStr · Max speed: ~35 Mbps", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                                                 }
                                                 Column(horizontalAlignment = Alignment.End) {
                                                     SignalBars(spot.signalBars)
@@ -1499,7 +1559,8 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
 
                             // Packages Grid
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(15 to 30, 30 to 60, 60 to 100).forEach { (mins, price) ->
+                                listOf(15, 30, 60).forEach { mins ->
+                                    val price = (mins * spot.pricePerMin).roundToInt()
                                     val isSelected = selectedPackageMins == mins
                                     Surface(
                                         onClick = {
@@ -1549,7 +1610,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                 onValueChange = {
                                     val mins = it.roundToInt()
                                     selectedPackageMins = mins
-                                    selectedPackagePrice = (mins * vm.pricePerMin).roundToInt()
+                                    selectedPackagePrice = (mins * spot.pricePerMin).roundToInt()
                                 },
                                 valueRange = 5f..180f,
                                 colors = SliderDefaults.colors(
@@ -1791,12 +1852,54 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                     onClick = {
                                         isProcessingPayment = true
                                         scope.launch {
-                                            delay(2000)
-                                            isProcessingPayment = false
-                                            showMpesaPrompt = false
-                                            secondsRemaining = selectedPackageMins * 60
-                                            isConnected = true
-                                            mpesaPin = ""
+                                            try {
+                                                val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "android-device-id"
+                                                val sessionReq = CreateSessionRequest(
+                                                    listingId = selectedSpot!!.listingId,
+                                                    guestDeviceId = deviceId,
+                                                    durationMin = selectedPackageMins,
+                                                    paymentMethod = "mpesa",
+                                                    phone = mpesaPhone
+                                                )
+                                                val sessionResp = RetrofitClient.apiService.createSession(sessionReq)
+                                                
+                                                val sessionId = sessionResp.sessionId
+                                                var attempts = 0
+                                                var isCompleted = false
+                                                while (!isCompleted && attempts < 40) {
+                                                    delay(3000)
+                                                    attempts++
+                                                    try {
+                                                        val statusResp = RetrofitClient.apiService.getSessionStatus(sessionId)
+                                                        if (statusResp.status == "CONNECTED") {
+                                                            isCompleted = true
+                                                            secondsRemaining = selectedPackageMins * 60
+                                                            isConnected = true
+                                                            showMpesaPrompt = false
+                                                        } else if (statusResp.status == "FAILED" || statusResp.status == "EXPIRED") {
+                                                            isCompleted = true
+                                                            android.util.Log.e("GuestPortal", "Session failed with status: ${statusResp.status}")
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("GuestPortal", "Error polling session", e)
+                                                    }
+                                                }
+                                                if (!isCompleted && BuildConfig.DEBUG) {
+                                                    secondsRemaining = selectedPackageMins * 60
+                                                    isConnected = true
+                                                    showMpesaPrompt = false
+                                                }
+                                            } catch (ex: Exception) {
+                                                android.util.Log.e("GuestPortal", "Failed real session creation/payment API call", ex)
+                                                if (BuildConfig.DEBUG) {
+                                                    secondsRemaining = selectedPackageMins * 60
+                                                    isConnected = true
+                                                    showMpesaPrompt = false
+                                                }
+                                            } finally {
+                                                isProcessingPayment = false
+                                                mpesaPin = ""
+                                            }
                                         }
                                     },
                                     enabled = mpesaPin.length >= 4,

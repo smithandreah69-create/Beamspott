@@ -13,6 +13,8 @@ android {
   namespace = "com.smithandreah69.beamspot"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+
   defaultConfig {
     applicationId = "com.smithandreah69.beamspot"
     minSdk = 24
@@ -21,18 +23,36 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID") ?: "YOUR_WEB_CLIENT_ID_HERE"
-    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
-    buildConfigField("String", "API_BASE_URL", "\"https://beamspott.up.railway.app\"")
+    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID")
+    if (isReleaseBuild && webClientId.isNullOrEmpty()) {
+        throw GradleException("GOOGLE_WEB_CLIENT_ID environment variable is missing for the release build!")
+    }
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId ?: "YOUR_WEB_CLIENT_ID_HERE"}\"")
+    buildConfigField("String", "API_BASE_URL", "\"https://beamspot.up.railway.app\"")
   }
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
+      val keystorePath = System.getenv("KEYSTORE_PATH")
+      val storePasswordVal = System.getenv("STORE_PASSWORD")
+      val keyPasswordVal = System.getenv("KEY_PASSWORD")
+
+      if (isReleaseBuild) {
+          if (keystorePath.isNullOrEmpty()) {
+              throw GradleException("KEYSTORE_PATH environment variable is missing for the release build!")
+          }
+          if (storePasswordVal.isNullOrEmpty()) {
+              throw GradleException("STORE_PASSWORD environment variable is missing for the release build!")
+          }
+          if (keyPasswordVal.isNullOrEmpty()) {
+              throw GradleException("KEY_PASSWORD environment variable is missing for the release build!")
+          }
+      }
+
+      storeFile = file(keystorePath ?: "${rootDir}/my-upload-key.jks")
+      storePassword = storePasswordVal ?: "dummyStorePassword"
       keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      keyPassword = keyPasswordVal ?: "dummyKeyPassword"
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")

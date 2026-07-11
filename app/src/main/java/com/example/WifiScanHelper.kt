@@ -23,7 +23,12 @@ data class WifiNetwork(
     val signalBars: Int,         // 1–5 for display
     val frequencyMhz: Int,
     val isSecured: Boolean,
-    val capabilities: String
+    val capabilities: String,
+    val isVerified: Boolean = false,
+    val listingId: Int = 0,
+    val pricePerMin: Double = 0.0,
+    val hostName: String = "",
+    val activeGuests: Int = 0
 )
 
 data class ConnectionStats(
