@@ -1,0 +1,3 @@
+*.jar binary
+*.jks binary
+gradle-wrapper.jar binary -text
