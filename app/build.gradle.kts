@@ -33,10 +33,18 @@ android {
 
   signingConfigs {
     create("release") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "Beamspot17399Andreahh"
-      keyAlias = "androiddebugkey"
-      keyPassword = "Beamspot17399Andreahh"
+      val releaseJks = file("${rootDir}/release.jks")
+      if (releaseJks.exists()) {
+        storeFile = releaseJks
+        storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "Beamspot17399Andreahh"
+        keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "upload"
+        keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "Beamspot17399Andreahh"
+      } else {
+        storeFile = file("${rootDir}/debug.keystore")
+        storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "Beamspot17399Andreahh"
+        keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "androiddebugkey"
+        keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "Beamspot17399Andreahh"
+      }
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
