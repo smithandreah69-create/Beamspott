@@ -35,6 +35,14 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
+      - name: Ensure valid gradle-wrapper.jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+            "https://raw.githubusercontent.com/gradle/gradle/v9.3.1/gradle/wrapper/gradle-wrapper.jar"
+          ls -la gradle/wrapper/gradle-wrapper.jar
+          file gradle/wrapper/gradle-wrapper.jar
+
       - name: Build Signed Release APK
         env:
           GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
