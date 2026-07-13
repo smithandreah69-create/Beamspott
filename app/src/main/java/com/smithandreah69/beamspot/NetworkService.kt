@@ -15,7 +15,7 @@ data class GoogleAuthRequest(
 )
 
 data class UserInfo(
-    val id: Int,
+    val id: String,
     val name: String,
     val email: String,
     val pictureUrl: String?,
@@ -38,7 +38,7 @@ data class NetworkVerifyRequest(
 )
 
 data class VerifiedNetwork(
-    val id: Int,
+    val id: String,
     val display_name: String,
     val ssid: String,
     val bssid: String,
@@ -53,7 +53,7 @@ data class NetworkVerifyResponse(
 )
 
 data class CreateSessionRequest(
-    val listingId: Int,
+    val listingId: String,
     val guestDeviceId: String,
     val durationMin: Int,
     val paymentMethod: String,
@@ -62,7 +62,7 @@ data class CreateSessionRequest(
 )
 
 data class CreateSessionResponse(
-    val sessionId: Int,
+    val sessionId: String,
     val amountTotal: Double,
     val platformFee: Double,
     val hostPayout: Double,
@@ -75,7 +75,7 @@ data class SessionStatusResponse(
 )
 
 data class PendingSessionResponse(
-    val sessionId: Int,
+    val sessionId: String,
     val guestIp: String?,
     val guestDeviceId: String,
     val durationMin: Int,
@@ -102,7 +102,7 @@ interface ApiService {
     suspend fun createSession(@Body request: CreateSessionRequest): CreateSessionResponse
 
     @GET("api/sessions/{id}")
-    suspend fun getSessionStatus(@Path("id") id: Int): SessionStatusResponse
+    suspend fun getSessionStatus(@Path("id") id: String): SessionStatusResponse
 
     @GET("api/hosts/stats")
     suspend fun getHostStats(): HostStatsResponse

@@ -171,8 +171,8 @@ class BeamSpotVpnService : VpnService() {
                             val mac = ipToMacMap[guestIp] ?: getMacForIp(guestIp)
                             if (mac != null) {
                                 authorizeDevice(mac, session.durationMin * 60 * 1000L)
-                                authorizeDeviceByIp(guestIp, session.durationMin * 60 * 1000L)
                             }
+                            authorizeDeviceByIp(guestIp, session.durationMin * 60 * 1000L)
                         }
                     }
                 } catch (e: Exception) {

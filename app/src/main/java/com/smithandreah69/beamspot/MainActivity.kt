@@ -1255,10 +1255,10 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
             }
             val demoSpots = if (BuildConfig.DEBUG) {
                 listOf(
-                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 1, pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
-                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 2, pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
-                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 3, pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
-                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = 4, pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "1", pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "2", pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "3", pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = "4", pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
                 )
             } else {
                 emptyList()
@@ -1268,10 +1268,10 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
             android.util.Log.e("GuestPortal", "API verifyNetworks call failed", e)
             if (BuildConfig.DEBUG) {
                 listOf(
-                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 1, pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
-                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 2, pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
-                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = 3, pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
-                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = 4, pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
+                    WifiNetwork("Jane_BeamSpot (KSh 2/min)", "02:1A:3F:8B:C9:4D", -48, 5, 2412, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "1", pricePerMin = 2.0, hostName = "Jane", activeGuests = 1),
+                    WifiNetwork("Karanja_Fast_BeamSpot", "08:11:4A:2B:9C:5E", -62, 4, 5180, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "2", pricePerMin = 3.0, hostName = "Karanja", activeGuests = 3),
+                    WifiNetwork("Matatu_Express_BeamSpot", "2C:F4:C5:13:92:AA", -70, 3, 2462, true, "[WPA2-PSK-CCMP]", isVerified = true, listingId = "3", pricePerMin = 1.5, hostName = "Express", activeGuests = 0),
+                    WifiNetwork("Town_Square_BeamSpot", "8E:9A:FF:33:44:8C", -54, 4, 2437, false, "[OPEN]", isVerified = true, listingId = "4", pricePerMin = 0.5, hostName = "Town Square", activeGuests = 12)
                 ).sortedByDescending { it.rssi }
             } else {
                 emptyList()

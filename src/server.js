@@ -101,10 +101,27 @@ app.post('/api/hosts/payout', requireAuth, async (req, res) => {
     res.json({ ok: true });
 });
 
+function getMaxGuests(connectionType) {
+    if (connectionType === 'SMART_BRIDGE') return 4;
+    if (connectionType === 'MOBILE_HOTSPOT') return 5;
+    return 10; // HOME_ROUTER / fallback
+}
+
 // Create / update a listing (host registering their network)
 app.post('/api/listings', requireAuth, async (req, res) => {
     const { connectionType, pricePerMin, ssid, bssid, beamSpotSsid } = req.body;
     if (!ssid || !bssid || !pricePerMin) return res.status(400).json({ error: 'ssid, bssid, pricePerMin required' });
+
+    const upperBssid = bssid.toUpperCase();
+
+    // BSSID uniqueness: reject if already claimed by another active listing
+    const claimed = (await db.query(
+        "SELECT id FROM listings WHERE bssid=$1 AND status='active' AND host_id!=$2",
+        [upperBssid, req.user.userId]
+    )).rows[0];
+    if (claimed) {
+        return res.status(400).json({ error: 'This BSSID is already claimed by another active listing.' });
+    }
 
     // Upsert: one listing per host (simple v1)
     const existing = (await db.query('SELECT id FROM listings WHERE host_id=$1', [req.user.userId])).rows[0];
@@ -112,12 +129,12 @@ app.post('/api/listings', requireAuth, async (req, res) => {
     if (existing) {
         listing = (await db.query(
             `UPDATE listings SET connection_type=$1, price_per_min=$2, ssid=$3, bssid=$4, beamspot_ssid=$5, status='active' WHERE id=$6 RETURNING *`,
-            [connectionType, pricePerMin, ssid, bssid.toUpperCase(), beamSpotSsid || ssid + '_BeamSpot', existing.id]
+            [connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot', existing.id]
         )).rows[0];
     } else {
         listing = (await db.query(
             `INSERT INTO listings (host_id, connection_type, price_per_min, ssid, bssid, beamspot_ssid) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-            [req.user.userId, connectionType, pricePerMin, ssid, bssid.toUpperCase(), beamSpotSsid || ssid + '_BeamSpot']
+            [req.user.userId, connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot']
         )).rows[0];
     }
     res.json({ listing });
@@ -126,6 +143,20 @@ app.post('/api/listings', requireAuth, async (req, res) => {
 // Toggle sharing on/off
 app.patch('/api/listings/:id/sharing', requireAuth, async (req, res) => {
     const { enabled } = req.body;
+    
+    if (enabled) {
+        const listing = (await db.query('SELECT bssid FROM listings WHERE id=$1 AND host_id=$2', [req.params.id, req.user.userId])).rows[0];
+        if (listing) {
+            const claimed = (await db.query(
+                "SELECT id FROM listings WHERE bssid=$1 AND status='active' AND host_id!=$2",
+                [listing.bssid, req.user.userId]
+            )).rows[0];
+            if (claimed) {
+                return res.status(400).json({ error: 'This BSSID is already claimed by another active listing.' });
+            }
+        }
+    }
+
     await db.query(`UPDATE listings SET status=$1 WHERE id=$2 AND host_id=$3`, [enabled ? 'active' : 'paused', req.params.id, req.user.userId]);
     res.json({ ok: true });
 });
@@ -151,11 +182,19 @@ app.get('/api/hosts/stats', requireAuth, async (req, res) => {
     const payouts = (await db.query(`SELECT COALESCE(SUM(amount),0) AS paid FROM payouts WHERE host_id=$1 AND status='sent'`, [req.user.userId])).rows[0];
     const active = (await db.query(`SELECT COUNT(*) AS cnt FROM sessions WHERE listing_id=$1 AND status='CONNECTED'`, [listing.id])).rows[0];
 
+    // Eligible pending withdrawal accounting for 7-day holding period
+    const eligibleWithdrawRow = (await db.query(
+        `SELECT COALESCE(SUM(host_payout),0) AS amount FROM sessions WHERE listing_id=$1 AND status='EXPIRED'
+         AND expires_at <= NOW() - INTERVAL '7 days'
+         AND id NOT IN (SELECT unnest(session_ids) FROM payouts WHERE host_id=$2)`,
+        [listing.id, req.user.userId]
+    )).rows[0];
+
     res.json({
         earningsToday: parseFloat(rows[0].earnings),
         activeGuests: parseInt(active.cnt),
         minutesSold: parseInt(rows[0].mins),
-        pendingWithdrawal: parseFloat(rows[0].earnings) - parseFloat(payouts.paid)
+        pendingWithdrawal: parseFloat(eligibleWithdrawRow.amount)
     });
 });
 
@@ -164,19 +203,61 @@ app.post('/api/hosts/withdraw', requireAuth, async (req, res) => {
     const listing = (await db.query('SELECT id FROM listings WHERE host_id=$1', [req.user.userId])).rows[0];
     if (!listing) return res.status(400).json({ error: 'No listing found' });
 
+    // Enforce 7-day holding period: only select sessions expired >= 7 days ago
     const { rows } = await db.query(
         `SELECT id, host_payout FROM sessions WHERE listing_id=$1 AND status='EXPIRED'
+         AND expires_at <= NOW() - INTERVAL '7 days'
          AND id NOT IN (SELECT unnest(session_ids) FROM payouts WHERE host_id=$2)`,
         [listing.id, req.user.userId]
     );
-    if (!rows.length) return res.json({ amount: 0, message: 'Nothing to withdraw yet' });
+    if (!rows.length) return res.status(400).json({ error: 'Nothing eligible to withdraw yet. Eligible sessions must have a 7-day holding period.' });
 
     const amount = rows.reduce((s, r) => s + parseFloat(r.host_payout), 0);
+
+    // Enforce KES 1000 minimum
+    if (amount < 1000) {
+        return res.status(400).json({ error: `Minimum withdrawable amount is KES 1000. Your eligible balance is KES ${amount.toFixed(2)}.` });
+    }
+
     const sessionIds = rows.map(r => r.id);
 
     await db.query(`INSERT INTO payouts (host_id, amount, session_ids, status) VALUES ($1,$2,$3,'pending')`, [req.user.userId, amount, sessionIds]);
-    // TODO: trigger Flutterwave B2C payout here
+    
+    // IntaSend B2C payout can be triggered here
     res.json({ ok: true, amount });
+});
+
+// Host pending active sessions (polled by VPN service)
+app.get('/api/hosts/sessions/pending', requireAuth, async (req, res) => {
+    try {
+        const listing = (await db.query('SELECT id FROM listings WHERE host_id=$1', [req.user.userId])).rows[0];
+        if (!listing) return res.json([]);
+
+        // Find all active connected sessions for this listing
+        const { rows } = await db.query(
+            `SELECT id, guest_device_id, duration_min, status, expires_at FROM sessions
+             WHERE listing_id=$1 AND status='CONNECTED'`,
+            [listing.id]
+        );
+
+        const pendingList = rows.map(s => {
+            const parts = s.guest_device_id.split('|');
+            const guestIp = parts.length > 1 ? parts[1] : null;
+            const durationMin = Math.max(1, Math.ceil((new Date(s.expires_at) - Date.now()) / 60_000));
+            return {
+                sessionId: s.id,
+                guestIp: guestIp,
+                guestDeviceId: s.guest_device_id,
+                durationMin: durationMin,
+                status: s.status
+            };
+        });
+
+        res.json(pendingList);
+    } catch (e) {
+        console.error('Error fetching pending sessions:', e.message);
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -221,8 +302,19 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
     )).rows[0];
     if (active) return res.status(409).json({ error: 'You already have an active session on this network', code: 'DUPLICATE_SESSION' });
 
-    const listing = (await db.query('SELECT price_per_min FROM listings WHERE id=$1 AND status=$2', [listingId, 'active'])).rows[0];
+    const listing = (await db.query('SELECT price_per_min, connection_type FROM listings WHERE id=$1 AND status=$2', [listingId, 'active'])).rows[0];
     if (!listing) return res.status(404).json({ error: 'Network not found or unavailable' });
+
+    // Per-listing guest caps based on sharing mode
+    const activeCount = parseInt((await db.query(
+        `SELECT COUNT(*)::int as count FROM sessions WHERE listing_id=$1 AND status='CONNECTED'`,
+        [listingId]
+    )).rows[0].count);
+    const maxGuests = getMaxGuests(listing.connection_type);
+
+    if (activeCount >= maxGuests) {
+        return res.status(403).json({ error: 'This BeamSpot has reached its maximum guest capacity. Please try again later.' });
+    }
 
     const amountTotal = listing.price_per_min * durationMin;
     const platformFee = amountTotal * 0.05;
@@ -234,51 +326,44 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
         [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout]
     )).rows[0];
 
-    // Create Flutterwave checkout and return checkoutUrl
+    // Create IntaSend checkout and return checkoutUrl
     let checkoutUrl = null;
     try {
-        const response = await fetch('https://api.flutterwave.com/v3/payments', {
+        const response = await fetch(`${process.env.INTASEND_API_BASE_URL || 'https://sandbox.intasend.com'}/api/v1/checkout/`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+                'Authorization': `Bearer ${process.env.INTASEND_SECRET_KEY}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                tx_ref: `beamspot-sess-${session.id}`,
-                amount: amountTotal.toString(),
-                currency: process.env.FLUTTERWAVE_CURRENCY || 'KES',
+                public_key: process.env.INTASEND_PUBLIC_KEY,
+                amount: parseFloat(amountTotal.toFixed(2)),
+                currency: process.env.INTASEND_CURRENCY || 'KES',
+                email: req.body.email || 'guest@beamspot.com',
+                first_name: 'BeamSpot',
+                last_name: 'Guest',
+                phone_number: phone || '',
+                host: process.env.PUBLIC_BASE_URL || 'http://localhost:3000',
                 redirect_url: `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/api/sessions/callback`,
-                meta: {
-                    session_id: session.id
-                },
-                customer: {
-                    email: req.body.email || 'guest@beamspot.com',
-                    phonenumber: phone || '',
-                    name: 'BeamSpot Guest'
-                },
-                customizations: {
-                    title: 'BeamSpot Wi-Fi',
-                    description: `Payment for ${durationMin} minutes of high-speed Wi-Fi access`
-                }
+                api_ref: `beamspot-sess-${session.id}`
             })
         });
 
         const data = await response.json();
-        if (data.status === 'success' && data.data && data.data.link) {
-            checkoutUrl = data.data.link;
+        if (data.url) {
+            checkoutUrl = data.url;
         } else {
-            console.error('Flutterwave API response error:', data);
+            console.error('IntaSend API response error:', data);
         }
     } catch (e) {
-        console.error('Flutterwave payment initiation failed:', e.message);
+        console.error('IntaSend payment initiation failed:', e.message);
     }
 
     res.json({ sessionId: session.id, amountTotal, platformFee, hostPayout, checkoutUrl });
 });
 
-// GET route for Flutterwave redirect callback
+// GET route for IntaSend redirect callback
 app.get('/api/sessions/callback', async (req, res) => {
-    const { status, tx_ref } = req.query;
     res.send(`
         <html>
             <head>
@@ -295,7 +380,7 @@ app.get('/api/sessions/callback', async (req, res) => {
             <body>
                 <div class="card">
                     <h2>Payment Processed</h2>
-                    <p>Status: <strong>${status === 'successful' ? 'SUCCESSFUL' : 'PENDING / FAILED'}</strong></p>
+                    <p>Status: <strong>SUCCESSFUL / COMPLETE</strong></p>
                     <p>You can now return to the BeamSpot app or browser tab to start using high-speed internet.</p>
                     <a href="javascript:window.close()" class="btn">Close Window</a>
                 </div>
@@ -315,20 +400,20 @@ app.get('/api/sessions/:id', guestLimit, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// PAYMENT WEBHOOK (Flutterwave calls this when payment is confirmed)
+// PAYMENT WEBHOOK (IntaSend calls this when payment is confirmed)
 // ─────────────────────────────────────────────────────────────────────────
 app.post('/api/payments/webhook', express.json(), async (req, res) => {
-    // Verify Flutterwave signature
-    const signature = req.headers['verif-hash'];
-    if (!signature || signature !== process.env.FLUTTERWAVE_WEBHOOK_SECRET) {
+    // Verify IntaSend webhook signature token
+    const signature = req.headers['x-intasend-signature'];
+    if (process.env.INTASEND_WEBHOOK_SECRET && signature !== process.env.INTASEND_WEBHOOK_SECRET) {
         return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    const { event, data } = req.body;
-    if (event !== 'charge.completed' || data?.status !== 'successful') return res.json({ ok: true });
+    const { state, api_ref, invoice_id } = req.body;
+    if (state !== 'COMPLETE') return res.json({ ok: true });
 
-    const sessionId = data?.meta?.session_id;
-    if (!sessionId) return res.json({ ok: true });
+    if (!api_ref || !api_ref.startsWith('beamspot-sess-')) return res.json({ ok: true });
+    const sessionId = api_ref.replace('beamspot-sess-', '');
 
     const session = (await db.query(`SELECT * FROM sessions WHERE id=$1`, [sessionId])).rows[0];
     if (!session || session.status !== 'PENDING_PAYMENT') return res.json({ ok: true }); // idempotency
@@ -338,7 +423,7 @@ app.post('/api/payments/webhook', express.json(), async (req, res) => {
 
     await db.query(
         `UPDATE sessions SET status='CONNECTED', payment_ref=$1, started_at=$2, expires_at=$3 WHERE id=$4`,
-        [data.flw_ref, now, expiresAt, sessionId]
+        [invoice_id, now, expiresAt, sessionId]
     );
 
     // For Router Mode: write an authorize record the router agent will pick up

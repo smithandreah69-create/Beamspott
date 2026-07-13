@@ -25,7 +25,7 @@ data class WifiNetwork(
     val isSecured: Boolean,
     val capabilities: String,
     val isVerified: Boolean = false,
-    val listingId: Int = 0,
+    val listingId: String = "",
     val pricePerMin: Double = 0.0,
     val hostName: String = "",
     val activeGuests: Int = 0
