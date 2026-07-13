@@ -22,12 +22,13 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      # FIX 1: We decode RELEASE_KEYSTORE_BASE64 to 'release.jks' so it matches what Gradle expects
       - name: Decode Keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > debug.keystore
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.jks
           else
             echo "Warning: RELEASE_KEYSTORE_BASE64 secret is not set!"
           fi
