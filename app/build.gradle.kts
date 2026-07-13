@@ -27,7 +27,7 @@ android {
     if (isReleaseBuild && webClientId.isNullOrEmpty()) {
         throw GradleException("GOOGLE_WEB_CLIENT_ID environment variable is missing for the release build!")
     }
-    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId ?: "YOUR_WEB_CLIENT_ID_HERE"}\"")
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId ?: "881216387321-uanchok16ubkh637drou0prp9gq33ljd.apps.googleusercontent.com"}\"")
     buildConfigField("String", "API_BASE_URL", "\"https://beamspot.up.railway.app/\"")
   }
 
@@ -40,9 +40,9 @@ android {
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "Beamspot17399Andreahh"
-      keyAlias = "androiddebugkey"
-      keyPassword = "Beamspot17399Andreahh"
+      storePassword = "andreahh"
+      keyAlias = "beamspot-key"
+      keyPassword = "andreahh"
     }
   }
 
