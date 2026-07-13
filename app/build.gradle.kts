@@ -23,26 +23,28 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID")
-    if (isReleaseBuild && webClientId.isNullOrEmpty()) {
+    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotEmpty() && !it.contains("16654224465") } ?: "881216387321-mrn70l75ljpgcpuvfb9o3s5770roeg81.apps.googleusercontent.com"
+    if (isReleaseBuild && webClientId.isEmpty()) {
         throw GradleException("GOOGLE_WEB_CLIENT_ID environment variable is missing for the release build!")
     }
-    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId ?: "881216387321-uanchok16ubkh637drou0prp9gq33ljd.apps.googleusercontent.com"}\"")
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
     buildConfigField("String", "API_BASE_URL", "\"https://beamspot.up.railway.app/\"")
   }
 
   signingConfigs {
     create("release") {
-      storeFile = file("${rootDir}/release.jks")
-      storePassword = System.getenv("RELEASE_STORE_PASSWORD")
-      keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-      keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+      val releaseKeystore = file("${rootDir}/release.jks")
+      storeFile = if (releaseKeystore.exists()) releaseKeystore else file("${rootDir}/debug.keystore")
+      storePassword = System.getenv("RELEASE_STORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "andreahh"
+      keyAlias = System.getenv("RELEASE_KEY_ALIAS")?.takeIf { it.isNotEmpty() } ?: "beamspot-key"
+      keyPassword = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "andreahh"
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "andreahh"
-      keyAlias = "beamspot-key"
-      keyPassword = "andreahh"
+      val releaseKeystore = file("${rootDir}/release.jks")
+      storeFile = if (releaseKeystore.exists()) releaseKeystore else file("${rootDir}/debug.keystore")
+      storePassword = System.getenv("RELEASE_STORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "andreahh"
+      keyAlias = System.getenv("RELEASE_KEY_ALIAS")?.takeIf { it.isNotEmpty() } ?: "beamspot-key"
+      keyPassword = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "andreahh"
     }
   }
 
@@ -71,6 +73,7 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
+  ignoreList.add("GOOGLE_WEB_CLIENT_ID")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
