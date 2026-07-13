@@ -56,9 +56,9 @@ android {
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
+      storePassword = "Beamspot17399Andreahh"
       keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      keyPassword = "Beamspot17399Andreahh"
     }
   }
 
