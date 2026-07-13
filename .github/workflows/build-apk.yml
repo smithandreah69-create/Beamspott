@@ -23,14 +23,8 @@ jobs:
           cache: 'gradle'
 
       - name: Decode Keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "Error: KEYSTORE_BASE64 secret is empty!"
-            exit 1
-          fi
-          echo "$KEYSTORE_BASE64" | base64 --decode > release.jks
+          base64 -d debug.keystore.base64 > debug.keystore
 
       - name: Make Gradlew Executable
         run: chmod +x gradlew
@@ -46,9 +40,6 @@ jobs:
       - name: Build Signed Release APK
         env:
           GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
-          KEYSTORE_PATH: ${{ github.workspace }}/release.jks
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
       - name: Upload APK Artifact

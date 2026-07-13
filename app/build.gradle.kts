@@ -33,26 +33,10 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH")
-      val storePasswordVal = System.getenv("STORE_PASSWORD")
-      val keyPasswordVal = System.getenv("KEY_PASSWORD")
-
-      if (isReleaseBuild) {
-          if (keystorePath.isNullOrEmpty()) {
-              throw GradleException("KEYSTORE_PATH environment variable is missing for the release build!")
-          }
-          if (storePasswordVal.isNullOrEmpty()) {
-              throw GradleException("STORE_PASSWORD environment variable is missing for the release build!")
-          }
-          if (keyPasswordVal.isNullOrEmpty()) {
-              throw GradleException("KEY_PASSWORD environment variable is missing for the release build!")
-          }
-      }
-
-      storeFile = file(keystorePath ?: "${rootDir}/my-upload-key.jks")
-      storePassword = storePasswordVal ?: "dummyStorePassword"
-      keyAlias = "upload"
-      keyPassword = keyPasswordVal ?: "dummyKeyPassword"
+      storeFile = file("${rootDir}/debug.keystore")
+      storePassword = "Beamspot17399Andreahh"
+      keyAlias = "androiddebugkey"
+      keyPassword = "Beamspot17399Andreahh"
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
