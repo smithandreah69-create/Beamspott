@@ -3,6 +3,7 @@ package com.smithandreah69.beamspot
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import java.security.MessageDigest
 import android.net.VpnService
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -299,6 +300,38 @@ private fun LandingCard(title: String, subtitle: String, accentColor: Color, ico
 // ─────────────────────────────────────────────────────────────────────────
 // SIGN-IN SCREEN — Google account picker with Demo Fallback
 // ─────────────────────────────────────────────────────────────────────────
+private fun getAppSignatures(context: android.content.Context): String {
+    try {
+        val packageInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+        }
+        val signatures = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            packageInfo.signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.signatures
+        }
+        if (signatures != null && signatures.isNotEmpty()) {
+            val md = java.security.MessageDigest.getInstance("SHA1")
+            val publicKey = md.digest(signatures[0].toByteArray())
+            val hexString = java.lang.StringBuilder()
+            for (i in publicKey.indices) {
+                val appendString = java.lang.Integer.toHexString(0xFF and publicKey[i].toInt())
+                if (appendString.length == 1) hexString.append("0")
+                hexString.append(appendString)
+                if (i < publicKey.size - 1) hexString.append(":")
+            }
+            return hexString.toString().uppercase()
+        }
+    } catch (e: java.lang.Exception) {
+        android.util.Log.e("BeamSpot_SHA1", "Error getting signature SHA1", e)
+    }
+    return "Unknown SHA-1"
+}
+
 @Composable
 fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
@@ -338,7 +371,16 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
             isLoading = false
             android.util.Log.e("BeamSpot_SignIn", "Google Sign-In ApiException caught! Type: ${e.javaClass.name}, StatusCode: ${e.statusCode}, Message: ${e.message}", e)
             if (e.statusCode == 10) {
-                errorMessage = "Google Sign-In failed (Code 10: Developer Error). This occurs in preview/emulator environments when the SHA-1 certificate fingerprint is not registered in Google Cloud. Click the Demo button below to bypass and continue testing!"
+                val sha1 = getAppSignatures(context)
+                errorMessage = "Google Sign-In failed (Code 10: Developer Error).\n\n" +
+                        "This happens because the certificate fingerprint of this build is not registered under your Android Client ID in Google Cloud.\n\n" +
+                        "To fix this once and for all:\n" +
+                        "1. Go to Google Cloud Console -> Credentials\n" +
+                        "2. Select your Android OAuth 2.0 Client ID (or create one)\n" +
+                        "3. Update the package name and certificate fingerprint to:\n" +
+                        "   • Package Name: com.smithandreah69.beamspot\n" +
+                        "   • SHA-1 Fingerprint:\n     $sha1\n\n" +
+                        "Meanwhile, you can click the \"Continue with Demo Account (Bypass)\" button below to bypass login and continue testing!"
             } else {
                 errorMessage = when (e.statusCode) {
                     12501 -> "Sign-in cancelled."
@@ -413,7 +455,7 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
             }
         }
 
-        if (BuildConfig.DEBUG) {
+        if (true) {
             Spacer(Modifier.height(18.dp))
 
             // OR Divider
