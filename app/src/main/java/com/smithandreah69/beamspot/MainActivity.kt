@@ -565,19 +565,42 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
         } catch (e: ApiException) {
             isLoading = false
             android.util.Log.e("BeamSpot_SignIn", "Google Sign-In ApiException caught! Type: ${e.javaClass.name}, StatusCode: ${e.statusCode}, Message: ${e.message}", e)
+            
+            val sha1 = getAppSignatures(context)
+            val buildType = if (BuildConfig.DEBUG) "debug" else "release"
+            val appPkg = context.packageName
+            val webClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
+            val packageInfo = try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.packageManager.getPackageInfo(context.packageName, 0)
+                }
+            } catch (ex: Exception) { null }
+            val verCode = packageInfo?.let { 
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) it.longVersionCode else @Suppress("DEPRECATION") it.versionCode 
+            } ?: 0
+            val verName = packageInfo?.versionName ?: "Unknown"
+
             if (e.statusCode == 10) {
-                val sha1 = getAppSignatures(context)
                 errorMessage = "Google Sign-In failed (Code 10: Developer Error).\n\n" +
                         "This happens because the certificate fingerprint of this build is not registered under your Android Client ID in Google Cloud.\n\n" +
                         "To fix this once and for all:\n" +
                         "1. Go to Google Cloud Console -> Credentials\n" +
                         "2. Select your Android OAuth 2.0 Client ID (or create one)\n" +
                         "3. Update the package name and certificate fingerprint to:\n" +
-                        "   • Package Name: com.smithandreah69.beamspot\n" +
+                        "   • Package Name: $appPkg\n" +
                         "   • SHA-1 Fingerprint:\n     $sha1\n\n" +
+                        "DIAGNOSTICS:\n" +
+                        "• Package Name: $appPkg\n" +
+                        "• SHA-1 Fingerprint: $sha1\n" +
+                        "• Web Client ID: $webClientId\n" +
+                        "• Build Type: $buildType\n" +
+                        "• Version: $verName ($verCode)\n\n" +
                         "Meanwhile, you can click the \"Continue with Demo Account (Bypass)\" button below to bypass login and continue testing!"
             } else {
-                errorMessage = when (e.statusCode) {
+                val friendlyMsg = when (e.statusCode) {
                     7 -> "Network error (code 7). Please make sure your device has internet access."
                     8 -> "Internal configuration error (code 8). Please verify that GOOGLE_WEB_CLIENT_ID matches your Google Cloud Web Client ID."
                     12500 -> "Sign-in required (code 12500). Please select an active Google account to sign in."
@@ -585,6 +608,16 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
                     12502 -> "Sign-in is currently in progress."
                     else  -> "Sign-in failed (code ${e.statusCode}). Check your internet connection or Google Client ID configuration."
                 }
+                errorMessage = "$friendlyMsg\n\n" +
+                        "RAW DETAILS:\n" +
+                        "• Exception: ${e.javaClass.simpleName}\n" +
+                        "• Message: ${e.localizedMessage ?: e.message}\n" +
+                        "• Code: ${e.statusCode}\n" +
+                        "• Package Name: $appPkg\n" +
+                        "• SHA-1 Fingerprint: $sha1\n" +
+                        "• Web Client ID: $webClientId\n" +
+                        "• Build Type: $buildType\n" +
+                        "• Version: $verName ($verCode)"
             }
         }
     }
@@ -630,8 +663,10 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
                 border = BorderStroke(1.dp, Amber.copy(0.3f)),
                 modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
             ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(errorMessage, color = Color(0xFFFFA726), fontSize = 12.sp, lineHeight = 17.sp)
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(errorMessage, color = Color(0xFFFFA726), fontSize = 12.sp, lineHeight = 17.sp)
+                    }
                 }
             }
         }
@@ -718,45 +753,43 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
             }
         }
 
-        if (BuildConfig.DEBUG) {
-            Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(18.dp))
 
-            // OR Divider
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HorizontalDivider(Modifier.weight(1f), color = BorderLine)
-                Text("OR", color = PaperDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp), fontFamily = FontFamily.Monospace)
-                HorizontalDivider(Modifier.weight(1f), color = BorderLine)
-            }
-
-            Spacer(Modifier.height(18.dp))
-
-            // Demo Bypass Button
-            Button(
-                onClick = { if (termsAccepted) proceedAsDemoHost() },
-                enabled = termsAccepted,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Panel,
-                    contentColor = Cyan,
-                    disabledContainerColor = Panel.copy(0.4f),
-                    disabledContentColor = Cyan.copy(0.4f)
-                ),
-                border = BorderStroke(1.dp, if (termsAccepted) Cyan.copy(0.4f) else Cyan.copy(0.15f)),
-                modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Settings, null, tint = if (termsAccepted) Cyan else Cyan.copy(0.4f), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text("Continue with Demo Account (Bypass)", color = if (termsAccepted) Cyan else Cyan.copy(0.4f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Text("Google login is recommended for real hosts.\nDemo Mode lets you preview the experience without setting up GCP.", color = PaperDim, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 16.sp)
+        // OR Divider
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
+            Text("OR", color = PaperDim, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp), fontFamily = FontFamily.Monospace)
+            HorizontalDivider(Modifier.weight(1f), color = BorderLine)
         }
+
+        Spacer(Modifier.height(18.dp))
+
+        // Demo Bypass Button
+        Button(
+            onClick = { if (termsAccepted) proceedAsDemoHost() },
+            enabled = termsAccepted,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Panel,
+                contentColor = Cyan,
+                disabledContainerColor = Panel.copy(0.4f),
+                disabledContentColor = Cyan.copy(0.4f)
+            ),
+            border = BorderStroke(1.dp, if (termsAccepted) Cyan.copy(0.4f) else Cyan.copy(0.15f)),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Settings, null, tint = if (termsAccepted) Cyan else Cyan.copy(0.4f), modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Continue with Demo Account (Bypass)", color = if (termsAccepted) Cyan else Cyan.copy(0.4f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Google login is recommended for real hosts.\nDemo Mode lets you preview the experience without setting up GCP.", color = PaperDim, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 16.sp)
         Spacer(Modifier.weight(1f))
     }
 }
@@ -802,10 +835,12 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
     val phoneRegex = remember { Regex("^(?:\\+?254|0)(7|1)\\d{8}$") }
     val isPhoneValid = phoneRegex.matches(vm.payoutNumber.replace(" ", ""))
+    val isBankAccountValid = vm.bankAccount.isNotBlank() && vm.bankAccount.all { it.isDigit() } && vm.bankAccount.length in 6..15
+    val isBankHolderValid = vm.bankHolder.isNotBlank() && vm.bankHolder.trim().split("\\s+".toRegex()).size >= 2
 
     val isFormValid = when (vm.payoutMethod) {
         "mpesa", "airtel" -> vm.payoutNumber.isNotBlank() && isPhoneValid
-        "bank" -> vm.bankName.isNotBlank() && vm.bankAccount.isNotBlank() && vm.bankHolder.isNotBlank()
+        "bank" -> vm.bankName.isNotBlank() && isBankAccountValid && isBankHolderValid
         "card" -> true
         else -> false
     }
@@ -881,9 +916,17 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 Spacer(Modifier.height(10.dp))
                 BeamLabel("Account Number")
                 BeamInput(value = vm.bankAccount, onValueChange = { vm.bankAccount = it }, placeholder = "e.g. 1234567890", keyboardType = KeyboardType.Number)
+                if (vm.bankAccount.isNotBlank() && !isBankAccountValid) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Account number must be numeric and 6 to 15 digits long", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                }
                 Spacer(Modifier.height(10.dp))
                 BeamLabel("Account Holder Name")
                 BeamInput(value = vm.bankHolder, onValueChange = { vm.bankHolder = it }, placeholder = "e.g. Jane Doe")
+                if (vm.bankHolder.isNotBlank() && !isBankHolderValid) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Enter both first and last name (at least two words)", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                }
             }
             "card" -> {
                 Text("Card payouts require Flutterwave account verification. You'll receive a link to complete this after setup.", color = PaperDim, fontSize = 12.sp)
@@ -904,7 +947,7 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
                     RetrofitClient.apiService.savePayout(
                         PayoutDetailsRequest(
                             payoutMethod = vm.payoutMethod,
-                            payoutNumber = vm.payoutNumber,
+                            payoutNumber = if (vm.payoutMethod == "bank" || vm.payoutMethod == "card") "" else normalizeKenyanPhone(vm.payoutNumber),
                             bankName = if (vm.payoutMethod == "bank") vm.bankName else null,
                             bankAccount = if (vm.payoutMethod == "bank") vm.bankAccount else null,
                             bankHolder = if (vm.payoutMethod == "bank") vm.bankHolder else null
@@ -2203,6 +2246,10 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                 placeholder = "e.g. 0712345678 or 07...",
                                 keyboardType = KeyboardType.Phone
                             )
+                            if (mpesaPhone.isNotBlank() && !isValidKenyanPhone(mpesaPhone)) {
+                                Spacer(Modifier.height(4.dp))
+                                Text("Enter a valid Safaricom/Airtel number (e.g. 0712345678)", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                            }
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 "An M-Pesa STK push prompt will appear on your screen automatically to confirm the payment.",
@@ -2216,7 +2263,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                             BeamButton(
                                 label = "Pay KSh ${selectedPackagePrice}.00 & Connect →",
                                 color = Amber,
-                                enabled = mpesaPhone.isNotBlank()
+                                enabled = mpesaPhone.isNotBlank() && isValidKenyanPhone(mpesaPhone)
                             ) {
                                 showMpesaPrompt = true
                             }
@@ -2438,7 +2485,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                                     guestDeviceId = compositeDeviceId,
                                                     durationMin = selectedPackageMins,
                                                     paymentMethod = "mpesa",
-                                                    phone = mpesaPhone,
+                                                    phone = normalizeKenyanPhone(mpesaPhone),
                                                     guestIp = localIp,
                                                     testBypassPassword = if (vm.isDemoMode) "beamspot-test-2026" else null
                                                 )
@@ -2500,4 +2547,23 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
             }
         }
     }
+}
+
+fun isValidKenyanPhone(input: String): Boolean {
+    val clean = input.replace(" ", "").trim()
+    return clean.matches(Regex("^(?:\\+?254|0)(7|1)\\d{8}$"))
+}
+
+fun normalizeKenyanPhone(input: String): String {
+    val clean = input.replace(" ", "").trim()
+    if (clean.startsWith("+254")) {
+        return "254" + clean.substring(4)
+    }
+    if (clean.startsWith("0")) {
+        return "254" + clean.substring(1)
+    }
+    if (clean.startsWith("254")) {
+        return clean
+    }
+    return "254" + clean
 }

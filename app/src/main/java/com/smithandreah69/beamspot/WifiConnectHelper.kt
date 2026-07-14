@@ -48,6 +48,7 @@ class WifiConnectHelper(private val context: Context) {
 
             val timeoutRunnable = Runnable {
                 if (isFinished.compareAndSet(false, true)) {
+                    android.util.Log.e("BeamSpot_WifiConnect", "CONNECTION TIMED OUT: Timeout triggered at 30 seconds. This usually means the router did not reply in time, signal is too weak, or credentials might be incorrect but Android did not trigger onUnavailable.")
                     callback?.let { connectivityManager.unregisterNetworkCallback(it) }
                     handler.post {
                         onFailure("Connection timed out. Please check the password and make sure you are in range.")
@@ -58,6 +59,7 @@ class WifiConnectHelper(private val context: Context) {
             callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     super.onAvailable(network)
+                    android.util.Log.d("BeamSpot_WifiConnect", "onAvailable: Successfully connected to SSID '$ssid'")
                     if (isFinished.compareAndSet(false, true)) {
                         handler.removeCallbacks(timeoutRunnable)
                         connectivityManager.bindProcessToNetwork(network)
@@ -69,6 +71,7 @@ class WifiConnectHelper(private val context: Context) {
 
                 override fun onUnavailable() {
                     super.onUnavailable()
+                    android.util.Log.e("BeamSpot_WifiConnect", "onUnavailable: Android OS rejected connection or network SSID '$ssid' not found/available. This commonly happens if the password is wrong, if there is a conflicting saved system profile for SSID '$ssid' (try manually forgetting it in Android WiFi settings first), or if the system rejected connection due to lack of immediate internet.")
                     if (isFinished.compareAndSet(false, true)) {
                         handler.removeCallbacks(timeoutRunnable)
                         handler.post {
@@ -79,12 +82,13 @@ class WifiConnectHelper(private val context: Context) {
 
                 override fun onLost(network: Network) {
                     super.onLost(network)
+                    android.util.Log.d("BeamSpot_WifiConnect", "onLost: Network lost")
                 }
             }
 
             connectivityManager.requestNetwork(request, callback)
-            // 15 second timeout for connection
-            handler.postDelayed(timeoutRunnable, 15000)
+            // 30 second timeout for connection (Item 27)
+            handler.postDelayed(timeoutRunnable, 30000)
 
         } else {
             // Legacy fallback for API < 29

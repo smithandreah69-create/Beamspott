@@ -23,7 +23,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotEmpty() && !it.contains("16654224465") } ?: "881216387321-mrn70l75ljpgcpuvfb9o3s5770roeg81.apps.googleusercontent.com"
+    val webClientId = System.getenv("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotEmpty() && !it.contains("16654224465") } ?: "881216387321-6oum1d3cjr1nufsee7dhmg94vmqooft7.apps.googleusercontent.com"
     if (isReleaseBuild && webClientId.isEmpty()) {
         throw GradleException("GOOGLE_WEB_CLIENT_ID environment variable is missing for the release build!")
     }
