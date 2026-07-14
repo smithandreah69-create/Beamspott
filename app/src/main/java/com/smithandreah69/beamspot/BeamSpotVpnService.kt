@@ -279,22 +279,24 @@ class BeamSpotVpnService : VpnService() {
 
         // Fallback or Legacy: Android 8.0 to 10 (API 26-29)
         // Try calling the hidden WifiManager.setWifiApEnabled (no callback needed)
-        try {
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            if (wifiManager != null) {
-                val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
-                    "setWifiApEnabled",
-                    android.net.wifi.WifiConfiguration::class.java,
-                    Boolean::class.javaPrimitiveType
-                )
-                setWifiApEnabledMethod.invoke(wifiManager, null, true)
-                actualHotspotSsid = "BeamSpot Hotspot"
-                actualHotspotPassword = "Check phone hotspot settings"
-                android.util.Log.i("BeamSpotVpnService", "Legacy tethering enabled via WifiManager.")
-                return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            try {
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                if (wifiManager != null) {
+                    val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
+                        "setWifiApEnabled",
+                        android.net.wifi.WifiConfiguration::class.java,
+                        Boolean::class.javaPrimitiveType
+                    )
+                    setWifiApEnabledMethod.invoke(wifiManager, null, true)
+                    actualHotspotSsid = "BeamSpot Hotspot"
+                    actualHotspotPassword = "Check phone hotspot settings"
+                    android.util.Log.i("BeamSpotVpnService", "Legacy tethering enabled via WifiManager.")
+                    return
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Error starting legacy tethering, trying standard LocalOnlyHotspot fallback", e)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("BeamSpotVpnService", "Error starting legacy tethering, trying standard LocalOnlyHotspot fallback", e)
         }
 
         // Standard LocalOnlyHotspot fallback if reflection methods fail or for older devices (API 26+)
@@ -359,19 +361,21 @@ class BeamSpotVpnService : VpnService() {
             }
         }
 
-        try {
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            if (wifiManager != null) {
-                val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
-                    "setWifiApEnabled",
-                    android.net.wifi.WifiConfiguration::class.java,
-                    Boolean::class.javaPrimitiveType
-                )
-                setWifiApEnabledMethod.invoke(wifiManager, null, false)
-                android.util.Log.i("BeamSpotVpnService", "Legacy tethering disabled via WifiManager.")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            try {
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                if (wifiManager != null) {
+                    val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
+                        "setWifiApEnabled",
+                        android.net.wifi.WifiConfiguration::class.java,
+                        Boolean::class.javaPrimitiveType
+                    )
+                    setWifiApEnabledMethod.invoke(wifiManager, null, false)
+                    android.util.Log.i("BeamSpotVpnService", "Legacy tethering disabled via WifiManager.")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Error stopping legacy tethering", e)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("BeamSpotVpnService", "Error stopping legacy tethering", e)
         }
 
         try {
