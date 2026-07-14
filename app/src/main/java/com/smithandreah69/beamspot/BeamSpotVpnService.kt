@@ -87,12 +87,16 @@ class BeamSpotVpnService : VpnService() {
             private set
         var isStaApSupported = false
             private set
-        const val MAX_GUESTS = 10 // Safe conservative hardware connection threshold
+        const val MAX_GUESTS = 30 // Safe conservative hardware connection threshold
+        var activeListingId = "1"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startVpn()
+            ACTION_START -> {
+                activeListingId = intent.getStringExtra("EXTRA_LISTING_ID") ?: "1"
+                startVpn()
+            }
             ACTION_STOP  -> stopVpn()
         }
         return START_STICKY
@@ -184,8 +188,117 @@ class BeamSpotVpnService : VpnService() {
     }
 
     private fun startHotspot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!android.provider.Settings.System.canWrite(applicationContext)) {
+                val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {
+                    startActivity(intent)
+                    Handler(Looper.getMainLooper()).post {
+                        android.widget.Toast.makeText(applicationContext, "Please allow Write Settings permission to enable Hotspot", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("BeamSpotVpnService", "Failed to launch write settings activity", e)
+                }
+                stopVpn()
+                return
+            }
+        }
+
+        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+        val hasSetup = prefs.getBoolean("has_done_hotspot_setup", false)
+        if (!hasSetup) {
+            prefs.edit().putBoolean("has_done_hotspot_setup", true).apply()
+            val intent = Intent().apply {
+                action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                startActivity(intent)
+                Handler(Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(applicationContext, "Configure your Hotspot name and password, then return to start BeamSpot.", android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                try {
+                    val fallbackIntent = Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(fallbackIntent)
+                } catch (_: Exception) {}
+            }
+            stopVpn()
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ (API 30+) uses TetheringManager / startTethering reflection
+            try {
+                val tm = applicationContext.getSystemService("tethering")
+                if (tm != null) {
+                    val tmClass = tm.javaClass
+                    val callbackClass = Class.forName("android.net.TetheringManager\$StartTetheringCallback")
+                    val executorClass = java.util.concurrent.Executor::class.java
+                    
+                    val startTetheringMethod = tmClass.getMethod(
+                        "startTethering",
+                        Int::class.javaPrimitiveType,
+                        executorClass,
+                        callbackClass
+                    )
+                    
+                    val callbackProxy = java.lang.reflect.Proxy.newProxyInstance(
+                        callbackClass.classLoader,
+                        arrayOf(callbackClass),
+                        object : java.lang.reflect.InvocationHandler {
+                            override fun invoke(proxy: Any?, method: java.lang.reflect.Method?, args: Array<out Any>?): Any? {
+                                if (method?.name == "onTetheringStarted") {
+                                    android.util.Log.i("BeamSpotVpnService", "Tethering started successfully!")
+                                    actualHotspotSsid = "BeamSpot Hotspot"
+                                    actualHotspotPassword = "Check phone hotspot settings"
+                                } else if (method?.name == "onTetheringFailed") {
+                                    val error = args?.get(0) as? Int ?: -1
+                                    android.util.Log.e("BeamSpotVpnService", "Tethering failed with error code: $error")
+                                }
+                                return null
+                            }
+                        }
+                    )
+                    
+                    val mainExecutor = applicationContext.mainExecutor
+                    startTetheringMethod.invoke(tm, 0, mainExecutor, callbackProxy) // 0 is TETHERING_WIFI
+                    isStaApSupported = true
+                    android.util.Log.i("BeamSpotVpnService", "Tethering started via TetheringManager on Android 11+.")
+                    return
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Error starting tethering on Android 11+, trying LocalOnlyHotspot fallback", e)
+            }
+        }
+
+        // Fallback or Legacy: Android 8.0 to 10 (API 26-29)
+        // Try calling the hidden WifiManager.setWifiApEnabled (no callback needed)
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (wifiManager != null) {
+                val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
+                    "setWifiApEnabled",
+                    android.net.wifi.WifiConfiguration::class.java,
+                    Boolean::class.javaPrimitiveType
+                )
+                setWifiApEnabledMethod.invoke(wifiManager, null, true)
+                actualHotspotSsid = "BeamSpot Hotspot"
+                actualHotspotPassword = "Check phone hotspot settings"
+                android.util.Log.i("BeamSpotVpnService", "Legacy tethering enabled via WifiManager.")
+                return
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BeamSpotVpnService", "Error starting legacy tethering, trying standard LocalOnlyHotspot fallback", e)
+        }
+
+        // Standard LocalOnlyHotspot fallback if reflection methods fail or for older devices (API 26+)
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        
         isStaApSupported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             wifiManager.isStaApConcurrencySupported
         } else {
@@ -222,7 +335,7 @@ class BeamSpotVpnService : VpnService() {
                         }
                     }, Handler(Looper.getMainLooper()))
                 } else {
-                    android.util.Log.w("BeamSpotVpnService", "Cannot start LocalOnlyHotspot: ACCESS_FINE_LOCATION permission not granted to service.")
+                    android.util.Log.w("BeamSpotVpnService", "Cannot start LocalOnlyHotspot: ACCESS_FINE_LOCATION permission not granted.")
                 }
             } catch (e: SecurityException) {
                 android.util.Log.e("BeamSpotVpnService", "SecurityException starting LocalOnlyHotspot", e)
@@ -233,6 +346,34 @@ class BeamSpotVpnService : VpnService() {
     }
 
     private fun stopHotspot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val tm = applicationContext.getSystemService("tethering")
+                if (tm != null) {
+                    val stopTetheringMethod = tm.javaClass.getMethod("stopTethering", Int::class.javaPrimitiveType)
+                    stopTetheringMethod.invoke(tm, 0) // 0 is TETHERING_WIFI
+                    android.util.Log.i("BeamSpotVpnService", "Tethering stopped successfully on Android 11+")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Error stopping tethering on Android 11+", e)
+            }
+        }
+
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (wifiManager != null) {
+                val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
+                    "setWifiApEnabled",
+                    android.net.wifi.WifiConfiguration::class.java,
+                    Boolean::class.javaPrimitiveType
+                )
+                setWifiApEnabledMethod.invoke(wifiManager, null, false)
+                android.util.Log.i("BeamSpotVpnService", "Legacy tethering disabled via WifiManager.")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BeamSpotVpnService", "Error stopping legacy tethering", e)
+        }
+
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 hotspotReservation?.close()
@@ -657,8 +798,12 @@ class TcpSession(
                         lastActivity = System.currentTimeMillis()
                         if (isCaptivePortalRedirector) {
                             // HTTP 302 Found instant response
+                            var base = BuildConfig.API_BASE_URL
+                            if (!base.endsWith("/")) {
+                                base += "/"
+                            }
                             val httpRedirect = "HTTP/1.1 302 Found\r\n" +
-                                    "Location: https://beamspott.up.railway.app/\r\n" +
+                                    "Location: ${base}connect.html?listingId=${BeamSpotVpnService.activeListingId}\r\n" +
                                     "Connection: close\r\n" +
                                     "Content-Length: 0\r\n\r\n"
                             sendTcpDataPacket(httpRedirect.toByteArray(Charsets.US_ASCII))

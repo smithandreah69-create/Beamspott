@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect to BeamSpot Wi-Fi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ink: '#0D0E11',
+                        panel: '#181A20',
+                        borderline: '#282C37',
+                        paper: '#F5F7FA',
+                        paperdim: '#8E9AA8',
+                        amberAccent: '#FFA000',
+                        cyanAccent: '#00D5FF'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0D0E11;
+        }
+        .glow-cyan {
+            box-shadow: 0 0 30px rgba(0, 213, 255, 0.1);
+        }
+        .glow-amber {
+            box-shadow: 0 0 30px rgba(255, 160, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="text-paper min-h-screen flex flex-col justify-center items-center px-4 py-8 relative">
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-cyanAccent/5 via-ink/0 to-ink/0 pointer-events-none"></div>
+
+    <!-- Main Container -->
+    <div class="w-full max-w-md bg-panel border border-borderline rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden glow-cyan">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amberAccent to-cyanAccent p-[2px] flex items-center justify-center">
+                    <div class="w-full h-full bg-panel rounded-[14px] flex items-center justify-center">
+                        <svg class="w-5 h-5 text-amberAccent animate-pulse" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 21v-4.875c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125V21m0 0h4.5V3.545M2.25 21h1.5m18 0h-18M2.25 9l4.5-1.636M18.75 3l-1.5.545m0 6.205l3 1m1.5-1.5l-3-1m-5.01 4.757l-.707-.707m3.182-3.182l-.707-.707M6.75 12v.008h-.008v-.008h.008zm0-.375a.375.375 0 100 .75.375.375 0 000-.75zM14.25 10.5V12M12 14.25V18M12 9.75V10.5M11.25 12h1.5m-1.5 2.25h1.5" />
+                        </svg>
+                    </div>
+                </div>
+                <div>
+                    <h1 class="text-xl font-black tracking-tight text-white">BeamSpot</h1>
+                    <p class="text-xs text-cyanAccent tracking-widest uppercase font-semibold">Captive Portal</p>
+                </div>
+            </div>
+            <div id="connection-status-badge" class="px-3 py-1 bg-amberAccent/10 border border-amberAccent/20 rounded-full text-[11px] font-semibold text-amberAccent flex items-center space-x-1">
+                <span class="w-2 h-2 rounded-full bg-amberAccent animate-ping"></span>
+                <span>Disconnected</span>
+            </div>
+        </div>
+
+        <!-- STAGES -->
+
+        <!-- 1. Selection & Setup -->
+        <div id="stage-select" class="space-y-6">
+            <div class="text-center md:text-left">
+                <h2 class="text-2xl font-bold text-white mb-2">Unlock High-Speed Internet</h2>
+                <p class="text-sm text-paperdim">Choose your time, enter your number, and get connected instantly.</p>
+            </div>
+
+            <!-- Preset package selector -->
+            <div class="space-y-2">
+                <label class="text-xs font-bold uppercase tracking-wider text-paperdim">Select Package</label>
+                <div class="grid grid-cols-4 gap-2">
+                    <button onclick="setDuration(1)" class="preset-btn px-2 py-3 rounded-2xl bg-ink border border-borderline hover:border-cyanAccent text-sm font-bold text-paper transition-all">1m</button>
+                    <button onclick="setDuration(15)" class="preset-btn px-2 py-3 rounded-2xl bg-ink border border-borderline hover:border-cyanAccent text-sm font-bold text-paper transition-all">15m</button>
+                    <button onclick="setDuration(30)" class="preset-btn px-2 py-3 rounded-2xl bg-cyanAccent/10 border border-cyanAccent/50 hover:border-cyanAccent text-sm font-bold text-cyanAccent transition-all" id="default-preset">30m</button>
+                    <button onclick="setDuration(60)" class="preset-btn px-2 py-3 rounded-2xl bg-ink border border-borderline hover:border-cyanAccent text-sm font-bold text-paper transition-all">1h</button>
+                </div>
+            </div>
+
+            <!-- Duration slider -->
+            <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                    <label class="text-xs font-bold uppercase tracking-wider text-paperdim">Custom Duration</label>
+                    <span id="duration-display" class="text-sm font-mono font-bold text-cyanAccent bg-cyanAccent/10 px-2 py-0.5 rounded-lg border border-cyanAccent/20">30 minutes</span>
+                </div>
+                <input type="range" id="duration-slider" min="1" max="180" value="30" oninput="onSliderInput(this.value)" class="w-full accent-cyanAccent cursor-pointer bg-ink h-2 rounded-lg appearance-none">
+            </div>
+
+            <!-- Phone Number & Bypass Details -->
+            <div class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-xs font-bold uppercase tracking-wider text-paperdim">M-Pesa Phone Number</label>
+                    <div class="relative">
+                        <span class="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-paperdim font-mono font-bold">+254</span>
+                        <input type="tel" id="phone-input" placeholder="712345678" class="w-full bg-ink border border-borderline rounded-2xl py-3.5 pl-16 pr-4 text-sm font-semibold font-mono text-white focus:outline-none focus:border-cyanAccent transition-colors">
+                    </div>
+                </div>
+
+                <div class="space-y-1.5">
+                    <div class="flex justify-between items-center">
+                        <label class="text-xs font-bold uppercase tracking-wider text-paperdim">Test Bypass Password</label>
+                        <span class="text-[10px] text-amberAccent uppercase font-bold">Dev Mode Only</span>
+                    </div>
+                    <input type="password" id="bypass-input" placeholder="••••••••" class="w-full bg-ink border border-borderline rounded-2xl py-3.5 px-4 text-sm font-semibold font-mono text-white focus:outline-none focus:border-cyanAccent transition-colors">
+                </div>
+            </div>
+
+            <!-- Price Breakdown Box -->
+            <div class="p-4 bg-ink/60 border border-borderline/60 rounded-2xl flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-paperdim font-medium">Estimated Rate</p>
+                    <p class="text-[11px] text-paperdim/70">Rate: KES <span id="rate-display">2.00</span> / min</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-paperdim font-medium">Total Amount</p>
+                    <p class="text-lg font-black text-amberAccent font-mono">KES <span id="price-display">60.00</span></p>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button onclick="initiateSession()" class="w-full bg-gradient-to-r from-amberAccent to-orange-500 text-ink font-bold py-4 rounded-2xl shadow-lg hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center space-x-2">
+                <svg class="w-5 h-5 text-ink" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+                <span>Authorize & Connect</span>
+            </button>
+        </div>
+
+        <!-- 2. Loading / Verification / Redirecting -->
+        <div id="stage-loading" class="hidden text-center py-12 space-y-6">
+            <div class="flex justify-center">
+                <div class="w-16 h-16 border-4 border-cyanAccent border-t-transparent rounded-full animate-spin"></div>
+            </div>
+            <div>
+                <h3 id="loading-status" class="text-xl font-bold text-white mb-2">Creating secure session...</h3>
+                <p id="loading-desc" class="text-sm text-paperdim max-w-xs mx-auto">Please authorize the prompt or wait while we redirect you to payment.</p>
+            </div>
+        </div>
+
+        <!-- 3. Polling / Payment Completed Status wait -->
+        <div id="stage-polling" class="hidden text-center py-12 space-y-6">
+            <div class="flex justify-center relative">
+                <div class="w-20 h-20 border-4 border-amberAccent border-t-transparent rounded-full animate-spin absolute"></div>
+                <div class="w-20 h-20 rounded-full flex items-center justify-center">
+                    <svg class="w-8 h-8 text-amberAccent animate-bounce" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-xl font-bold text-white mb-2">Waiting for Payment</h3>
+                <p class="text-sm text-paperdim max-w-xs mx-auto mb-4">Complete your payment in the separate tab or your phone and do not close this window.</p>
+                <div class="text-xs text-cyanAccent font-mono bg-cyanAccent/10 py-2 px-4 rounded-xl border border-cyanAccent/20 inline-block">
+                    Session ID: <span id="polling-session-id"></span>
+                </div>
+            </div>
+            <div class="pt-4">
+                <button onclick="checkSessionStatusDirect()" class="text-xs font-semibold text-paperdim hover:text-white underline transition-colors">
+                    Check Status Manually
+                </button>
+            </div>
+        </div>
+
+        <!-- 4. Connected -->
+        <div id="stage-connected" class="hidden text-center py-8 space-y-8">
+            <div class="flex justify-center">
+                <div class="w-20 h-20 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center justify-center glow-amber">
+                    <svg class="w-10 h-10 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-3xl font-black tracking-tight text-white mb-1">You are Connected!</h3>
+                <p class="text-sm text-cyanAccent font-medium">Wi-Fi Internet Access Authorized</p>
+            </div>
+
+            <!-- Countdown Timer -->
+            <div class="bg-ink border border-borderline rounded-3xl p-6 space-y-2">
+                <p class="text-xs text-paperdim uppercase font-bold tracking-wider">Time Remaining</p>
+                <p id="countdown-timer" class="text-4xl font-extrabold font-mono tracking-wider text-amberAccent">00:00:00</p>
+                <div class="w-full bg-borderline h-2 rounded-full overflow-hidden">
+                    <div id="time-progress-bar" class="bg-gradient-to-r from-amberAccent to-cyanAccent h-full transition-all duration-1000" style="width: 100%;"></div>
+                </div>
+            </div>
+
+            <div class="space-y-2 text-left bg-ink/40 border border-borderline/40 rounded-2xl p-4 text-xs text-paperdim">
+                <div class="flex justify-between">
+                    <span>Authorized Device:</span>
+                    <span id="device-id-display" class="font-mono font-bold text-white">Detecting...</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>Expires At:</span>
+                    <span id="expires-at-display" class="font-mono font-bold text-white">Calculating...</span>
+                </div>
+            </div>
+
+            <p class="text-xs text-paperdim">You may now browse freely. Keep this tab open to monitor your session.</p>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-8 pt-6 border-t border-borderline/50 text-center">
+            <p class="text-[11px] text-paperdim">Secure processing by <strong>IntaSend</strong>. By continuing, you agree to the <a href="/terms" target="_blank" class="text-cyanAccent hover:underline">Terms of Service</a>.</p>
+        </div>
+    </div>
+
+    <!-- Client-side logic -->
+    <script>
+        // Parameters & State
+        let selectedDuration = 30; // default 30 mins
+        let currentListingId = null;
+        let currentSessionId = null;
+        let countdownInterval = null;
+        let sessionPollingInterval = null;
+        let originalTotalSeconds = 0;
+        const ratePerMin = 2.0; // 2 KES per min default, can override if listing details fetched
+
+        // Parse query params
+        const urlParams = new URLSearchParams(window.location.search);
+        currentListingId = urlParams.get('listingId');
+        
+        // Generate a stable guest device fingerprint if not supplied (VPN service will provide/know this but we store on captive portal too)
+        let guestDeviceId = localStorage.getItem('guest_device_id');
+        if (!guestDeviceId) {
+            guestDeviceId = 'web-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+            localStorage.setItem('guest_device_id', guestDeviceId);
+        }
+
+        // Initialize state
+        window.addEventListener('load', () => {
+            if (!currentListingId) {
+                // If not provided, fallback to a mock/demo listingId to keep page fully usable for testing
+                console.warn('listingId URL parameter not found. Defaulting to a test listing ID.');
+                currentListingId = '00000000-0000-0000-0000-000000000000';
+            }
+            // Trigger default state
+            setDuration(30);
+            document.getElementById('device-id-display').innerText = guestDeviceId.toUpperCase();
+        });
+
+        function setDuration(mins) {
+            selectedDuration = parseInt(mins);
+            
+            // Highlight preset buttons
+            const buttons = document.querySelectorAll('.preset-btn');
+            buttons.forEach(btn => {
+                btn.classList.remove('bg-cyanAccent/10', 'border-cyanAccent/50', 'text-cyanAccent');
+                btn.classList.add('bg-ink', 'border-borderline', 'text-paper');
+            });
+
+            // If it matches a preset, highlight it
+            buttons.forEach(btn => {
+                if (btn.innerText === mins + 'm' || (mins === 60 && btn.innerText === '1h')) {
+                    btn.classList.remove('bg-ink', 'border-borderline', 'text-paper');
+                    btn.classList.add('bg-cyanAccent/10', 'border-cyanAccent/50', 'text-cyanAccent');
+                }
+            });
+
+            // Update range slider and inputs
+            document.getElementById('duration-slider').value = mins;
+            updatePricingDisplay(mins);
+        }
+
+        function onSliderInput(value) {
+            // Remove highlight on preset buttons since custom range is active
+            const buttons = document.querySelectorAll('.preset-btn');
+            buttons.forEach(btn => {
+                btn.classList.remove('bg-cyanAccent/10', 'border-cyanAccent/50', 'text-cyanAccent');
+                btn.classList.add('bg-ink', 'border-borderline', 'text-paper');
+            });
+            selectedDuration = parseInt(value);
+            updatePricingDisplay(value);
+        }
+
+        function updatePricingDisplay(mins) {
+            document.getElementById('duration-display').innerText = mins + (mins == 1 ? ' minute' : ' minutes');
+            const total = mins * ratePerMin;
+            document.getElementById('price-display').innerText = total.toFixed(2);
+        }
+
+        function showStage(stageId) {
+            document.getElementById('stage-select').classList.add('hidden');
+            document.getElementById('stage-loading').classList.add('hidden');
+            document.getElementById('stage-polling').classList.add('hidden');
+            document.getElementById('stage-connected').classList.add('hidden');
+
+            document.getElementById(stageId).classList.remove('hidden');
+        }
+
+        function isValidKenyanPhone(input) {
+            const regex = /^(?:\+?254|0)(7|1)\d{8}$/;
+            return regex.test(input);
+        }
+
+        function normalizeKenyanPhone(input) {
+            const clean = input.replace(/\D/g, '');
+            if (clean.startsWith('0')) {
+                return '254' + clean.slice(1);
+            } else if (clean.startsWith('254')) {
+                return clean;
+            }
+            return '254' + clean;
+        }
+
+        async function initiateSession() {
+            const phoneInputVal = document.getElementById('phone-input').value.trim();
+            const bypassPass = document.getElementById('bypass-input').value.trim();
+
+            if (!phoneInputVal && !bypassPass) {
+                alert('Please enter your M-Pesa phone number or the testing bypass credential.');
+                return;
+            }
+
+            let phone = "";
+            if (phoneInputVal) {
+                if (!isValidKenyanPhone(phoneInputVal)) {
+                    alert('Please enter a valid Safaricom/Airtel number (e.g. 0712345678 or 254712345678)');
+                    return;
+                }
+                phone = normalizeKenyanPhone(phoneInputVal);
+            } else if (!bypassPass) {
+                alert('M-Pesa phone number is required.');
+                return;
+            }
+
+            showStage('stage-loading');
+            document.getElementById('loading-status').innerText = "Creating secure session...";
+            document.getElementById('loading-desc').innerText = "Validating network details and establishing tunnel.";
+
+            try {
+                const reqBody = {
+                    listingId: currentListingId,
+                    guestDeviceId: guestDeviceId,
+                    durationMin: selectedDuration,
+                    phone: phone
+                };
+
+                if (bypassPass) {
+                    reqBody.testBypassPassword = bypassPass;
+                }
+
+                const response = await fetch('/api/sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reqBody)
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Failed to initiate session');
+                }
+
+                const data = await response.json();
+                currentSessionId = data.sessionId;
+
+                if (data.testMode) {
+                    // Test bypass mode direct connection!
+                    document.getElementById('loading-status').innerText = "Test Bypass success!";
+                    document.getElementById('loading-desc').innerText = "Configuring captive portal bypass parameters.";
+                    setTimeout(() => {
+                        verifyAndStartConnection(currentSessionId);
+                    }, 1000);
+                } else if (data.checkoutUrl) {
+                    // Real checkout flow: Redirect or open checkout in a new window/tab
+                    document.getElementById('loading-status').innerText = "Redirecting to payment...";
+                    document.getElementById('loading-desc').innerText = "Opening IntaSend M-Pesa gateway securely.";
+                    
+                    window.open(data.checkoutUrl, '_blank');
+                    
+                    document.getElementById('polling-session-id').innerText = currentSessionId;
+                    showStage('stage-polling');
+                    startStatusPolling();
+                } else {
+                    throw new Error('Payment gateway error. No checkout URL returned.');
+                }
+            } catch (error) {
+                alert(error.message);
+                showStage('stage-select');
+            }
+        }
+
+        function startStatusPolling() {
+            if (sessionPollingInterval) clearInterval(sessionPollingInterval);
+            
+            sessionPollingInterval = setInterval(async () => {
+                await checkSessionStatusDirect();
+            }, 3000);
+        }
+
+        async function checkSessionStatusDirect() {
+            if (!currentSessionId) return;
+            try {
+                const response = await fetch(`/api/sessions/${currentSessionId}`);
+                if (!response.ok) return;
+                const data = await response.json();
+                
+                if (data.status === 'CONNECTED') {
+                    clearInterval(sessionPollingInterval);
+                    verifyAndStartConnection(currentSessionId);
+                } else if (data.status === 'EXPIRED' || data.status === 'FAILED') {
+                    clearInterval(sessionPollingInterval);
+                    alert('Session failed or expired. Please try again.');
+                    showStage('stage-select');
+                }
+            } catch (e) {
+                console.error('Polling error:', e);
+            }
+        }
+
+        async function verifyAndStartConnection(sessId) {
+            try {
+                const response = await fetch(`/api/sessions/${sessId}`);
+                if (!response.ok) throw new Error('Session validation failed');
+                const data = await response.json();
+                
+                if (data.status === 'CONNECTED') {
+                    // Transition connection status badge
+                    const badge = document.getElementById('connection-status-badge');
+                    badge.classList.remove('bg-amberAccent/10', 'border-amberAccent/20', 'text-amberAccent');
+                    badge.classList.add('bg-emerald-500/10', 'border-emerald-500/20', 'text-emerald-400');
+                    badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Connected</span>';
+
+                    // Prepare countdown
+                    const expiry = new Date(data.expiresAt);
+                    document.getElementById('expires-at-display').innerText = expiry.toLocaleTimeString();
+
+                    startCountdown(expiry);
+                    showStage('stage-connected');
+                } else {
+                    showStage('stage-select');
+                }
+            } catch (err) {
+                alert('Connection validation failed: ' + err.message);
+                showStage('stage-select');
+            }
+        }
+
+        function startCountdown(expiryTime) {
+            if (countdownInterval) clearInterval(countdownInterval);
+
+            const calculateTimeRemaining = () => {
+                const now = new Date();
+                const diffMs = expiryTime - now;
+                if (diffMs <= 0) {
+                    clearInterval(countdownInterval);
+                    document.getElementById('countdown-timer').innerText = "00:00:00";
+                    document.getElementById('time-progress-bar').style.width = "0%";
+                    alert('Your BeamSpot session has expired.');
+                    location.reload();
+                    return;
+                }
+
+                const totalSec = Math.floor(diffMs / 1000);
+                if (originalTotalSeconds === 0) {
+                    originalTotalSeconds = totalSec;
+                }
+
+                const hours = Math.floor(totalSec / 3600);
+                const minutes = Math.floor((totalSec % 3600) / 60);
+                const seconds = totalSec % 60;
+
+                const pad = (num) => String(num).padStart(2, '0');
+                document.getElementById('countdown-timer').innerText = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+
+                const progress = (totalSec / originalTotalSeconds) * 100;
+                document.getElementById('time-progress-bar').style.width = progress + '%';
+            };
+
+            calculateTimeRemaining();
+            countdownInterval = setInterval(calculateTimeRemaining, 1000);
+        }
+    </script>
+</body>
+</html>

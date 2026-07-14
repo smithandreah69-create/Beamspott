@@ -44,6 +44,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import android.content.Context
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -81,22 +84,116 @@ private object Route {
 }
 
 // ─── Shared ViewModel ─────────────────────────────────────────────────────
-class AppViewModel : ViewModel() {
-    var userName    by mutableStateOf("")
-    var userEmail   by mutableStateOf("")
-    var isSignedIn  by mutableStateOf(false)
+class AppViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs = application.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
 
-    var selectedMode       by mutableStateOf("")      // "smart_bridge" | "router" | "hotspot"
-    var selectedWifi       by mutableStateOf<WifiNetwork?>(null)
-    var beamSpotNetworkName by mutableStateOf("")
-    var vpnActive          by mutableStateOf(false)
+    private val _isDemoMode = mutableStateOf(prefs.getBoolean("is_demo_mode", false))
+    var isDemoMode: Boolean
+        get() = _isDemoMode.value
+        set(value) {
+            _isDemoMode.value = value
+            prefs.edit().putBoolean("is_demo_mode", value).apply()
+        }
 
-    var pricePerMin    by mutableStateOf(2.0)
-    var payoutMethod   by mutableStateOf("mpesa")     // mpesa | airtel | bank | card
-    var payoutNumber   by mutableStateOf("")
-    var bankName       by mutableStateOf("")
-    var bankAccount    by mutableStateOf("")
-    var bankHolder     by mutableStateOf("")
+    private val _userName = mutableStateOf(prefs.getString("user_name", "") ?: "")
+    var userName: String
+        get() = _userName.value
+        set(value) {
+            _userName.value = value
+            prefs.edit().putString("user_name", value).apply()
+        }
+
+    private val _userEmail = mutableStateOf(prefs.getString("user_email", "") ?: "")
+    var userEmail: String
+        get() = _userEmail.value
+        set(value) {
+            _userEmail.value = value
+            prefs.edit().putString("user_email", value).apply()
+        }
+
+    private val _isSignedIn = mutableStateOf(prefs.getBoolean("is_signed_in", false))
+    var isSignedIn: Boolean
+        get() = _isSignedIn.value
+        set(value) {
+            _isSignedIn.value = value
+            prefs.edit().putBoolean("is_signed_in", value).apply()
+        }
+
+    private val _activeListingId = mutableStateOf(prefs.getString("active_listing_id", "1") ?: "1")
+    var activeListingId: String
+        get() = _activeListingId.value
+        set(value) {
+            _activeListingId.value = value
+            prefs.edit().putString("active_listing_id", value).apply()
+        }
+
+    private val _selectedMode = mutableStateOf(prefs.getString("selected_mode", "") ?: "")
+    var selectedMode: String
+        get() = _selectedMode.value
+        set(value) {
+            _selectedMode.value = value
+            prefs.edit().putString("selected_mode", value).apply()
+        }
+
+    var selectedWifi by mutableStateOf<WifiNetwork?>(null)
+
+    private val _beamSpotNetworkName = mutableStateOf(prefs.getString("beam_spot_network_name", "") ?: "")
+    var beamSpotNetworkName: String
+        get() = _beamSpotNetworkName.value
+        set(value) {
+            _beamSpotNetworkName.value = value
+            prefs.edit().putString("beam_spot_network_name", value).apply()
+        }
+
+    var vpnActive by mutableStateOf(false)
+
+    private val _pricePerMin = mutableStateOf(prefs.getFloat("price_per_min", 2.0f).toDouble())
+    var pricePerMin: Double
+        get() = _pricePerMin.value
+        set(value) {
+            _pricePerMin.value = value
+            prefs.edit().putFloat("price_per_min", value.toFloat()).apply()
+        }
+
+    private val _payoutMethod = mutableStateOf(prefs.getString("payout_method", "mpesa") ?: "mpesa")
+    var payoutMethod: String
+        get() = _payoutMethod.value
+        set(value) {
+            _payoutMethod.value = value
+            prefs.edit().putString("payout_method", value).apply()
+        }
+
+    private val _payoutNumber = mutableStateOf(prefs.getString("payout_number", "") ?: "")
+    var payoutNumber: String
+        get() = _payoutNumber.value
+        set(value) {
+            _payoutNumber.value = value
+            prefs.edit().putString("payout_number", value).apply()
+        }
+
+    private val _bankName = mutableStateOf(prefs.getString("bank_name", "") ?: "")
+    var bankName: String
+        get() = _bankName.value
+        set(value) {
+            _bankName.value = value
+            prefs.edit().putString("bank_name", value).apply()
+        }
+
+    private val _bankAccount = mutableStateOf(prefs.getString("bank_account", "") ?: "")
+    var bankAccount: String
+        get() = _bankAccount.value
+        set(value) {
+            _bankAccount.value = value
+            prefs.edit().putString("bank_account", value).apply()
+        }
+
+    private val _bankHolder = mutableStateOf(prefs.getString("bank_holder", "") ?: "")
+    var bankHolder: String
+        get() = _bankHolder.value
+        set(value) {
+            _bankHolder.value = value
+            prefs.edit().putString("bank_holder", value).apply()
+        }
 
     var guestCount         by mutableStateOf(0)
     var todayEarnings      by mutableStateOf(0.0)
@@ -107,6 +204,36 @@ class AppViewModel : ViewModel() {
     var linkSpeedMbps      by mutableStateOf(0)
     var distanceMeters     by mutableStateOf(0.0)
     var connectedSsid      by mutableStateOf("")
+
+    init {
+        val savedToken = prefs.getString("jwt_token", null)
+        if (savedToken != null) {
+            RetrofitClient.setToken(savedToken)
+        }
+    }
+
+    fun saveToken(token: String?) {
+        RetrofitClient.setToken(token)
+        prefs.edit().putString("jwt_token", token).apply()
+    }
+
+    fun logout() {
+        prefs.edit().clear().apply()
+        _userName.value = ""
+        _userEmail.value = ""
+        _isSignedIn.value = false
+        _isDemoMode.value = false
+        _activeListingId.value = "1"
+        _selectedMode.value = ""
+        _beamSpotNetworkName.value = ""
+        _pricePerMin.value = 2.0
+        _payoutMethod.value = "mpesa"
+        _payoutNumber.value = ""
+        _bankName.value = ""
+        _bankAccount.value = ""
+        _bankHolder.value = ""
+        RetrofitClient.setToken(null)
+    }
 
     fun refreshStats(helper: WifiScanHelper) {
         viewModelScope.launch {
@@ -169,7 +296,7 @@ fun BeamSpotApp() {
 
     NavHost(navController = nav, startDestination = Route.SPLASH) {
         composable(Route.SPLASH)         { SplashScreen(nav) }
-        composable(Route.LANDING)        { LandingScreen(nav) }
+        composable(Route.LANDING)        { LandingScreen(nav, vm) }
         composable(Route.SIGN_IN)        { SignInScreen(nav, vm) }
         composable(Route.MODE_SELECT)    { ModeSelectScreen(nav, vm) }
         composable(Route.PAYOUT_SETUP)   { PayoutSetupScreen(nav, vm) }
@@ -238,21 +365,23 @@ fun SplashScreen(nav: NavHostController) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// LANDING SCREEN — two cards
+// ─── LANDING SCREEN — two cards
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun LandingScreen(nav: NavHostController) {
+fun LandingScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(
         Modifier.fillMaxSize().background(Ink).padding(24.dp),
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column {
-            Spacer(Modifier.height(48.dp))
-            Text("BeamSpot", color = Paper, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
-            Spacer(Modifier.height(6.dp))
-            Text("Local internet, paid by the minute.", color = PaperDim, fontSize = 14.sp)
+        Spacer(Modifier.weight(1f))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("BeamSpot", color = Paper, fontSize = 36.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
+            Spacer(Modifier.height(8.dp))
+            Text("Local internet, paid by the minute.", color = PaperDim, fontSize = 15.sp, textAlign = TextAlign.Center)
         }
+        Spacer(Modifier.height(28.dp))
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             LandingCard(
                 title = "I need internet",
@@ -266,11 +395,75 @@ fun LandingScreen(nav: NavHostController) {
                 subtitle = "Share your connection and earn per minute",
                 accentColor = Cyan,
                 icon = Icons.Filled.Router,
-                onClick = { nav.navigate(Route.SIGN_IN) }
+                onClick = {
+                    if (vm.isSignedIn) {
+                        nav.navigate(Route.MODE_SELECT)
+                    } else {
+                        nav.navigate(Route.SIGN_IN)
+                    }
+                }
             )
         }
-        Text("By continuing you agree to BeamSpot's Terms of Service.",
-            color = PaperDim, fontSize = 10.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.weight(1f))
+        
+        val annotatedText = androidx.compose.ui.text.buildAnnotatedString {
+            append("By continuing you agree to BeamSpot's ")
+            
+            val termsStart = length
+            append("Terms of Service")
+            val termsEnd = length
+            addStringAnnotation(tag = "URL", annotation = "terms", start = termsStart, end = termsEnd)
+            addStyle(
+                style = androidx.compose.ui.text.SpanStyle(
+                    color = Cyan,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    fontWeight = FontWeight.Medium
+                ),
+                start = termsStart,
+                end = termsEnd
+            )
+            
+            append(" and ")
+            
+            val privacyStart = length
+            append("Privacy Policy")
+            val privacyEnd = length
+            addStringAnnotation(tag = "URL", annotation = "privacy", start = privacyStart, end = privacyEnd)
+            addStyle(
+                style = androidx.compose.ui.text.SpanStyle(
+                    color = Cyan,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    fontWeight = FontWeight.Medium
+                ),
+                start = privacyStart,
+                end = privacyEnd
+            )
+            
+            append(".")
+        }
+        
+        androidx.compose.foundation.text.ClickableText(
+            text = annotatedText,
+            style = androidx.compose.ui.text.TextStyle(
+                color = PaperDim,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            onClick = { offset ->
+                annotatedText.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                    .firstOrNull()?.let { annotation ->
+                        try {
+                            val baseUrl = BuildConfig.API_BASE_URL.removeSuffix("/")
+                            val destUrl = if (annotation.item == "terms") "$baseUrl/terms" else "$baseUrl/privacy"
+                            val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(destUrl))
+                            context.startActivity(browserIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("BeamSpot_Landing", "Failed to open link: ${annotation.item}", e)
+                        }
+                    }
+            }
+        )
     }
 }
 
@@ -338,6 +531,7 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
+    var termsAccepted by remember { mutableStateOf(false) }
 
     // When the user picks a Google account, this receives the result
     val signInLauncher = rememberLauncherForActivityResult(
@@ -352,9 +546,10 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
                 scope.launch {
                     try {
                         val response = RetrofitClient.apiService.verifyGoogleIdToken(GoogleAuthRequest(idToken))
-                        RetrofitClient.setToken(response.token)
+                        vm.saveToken(response.token)
                         vm.userName   = response.user.name
                         vm.userEmail  = response.user.email
+                        vm.isDemoMode = false
                         vm.isSignedIn = true
                         isLoading = false
                         nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
@@ -383,9 +578,12 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
                         "Meanwhile, you can click the \"Continue with Demo Account (Bypass)\" button below to bypass login and continue testing!"
             } else {
                 errorMessage = when (e.statusCode) {
+                    7 -> "Network error (code 7). Please make sure your device has internet access."
+                    8 -> "Internal configuration error (code 8). Please verify that GOOGLE_WEB_CLIENT_ID matches your Google Cloud Web Client ID."
+                    12500 -> "Sign-in required (code 12500). Please select an active Google account to sign in."
                     12501 -> "Sign-in cancelled."
                     12502 -> "Sign-in is currently in progress."
-                    else  -> "Sign-in failed (code ${e.statusCode}). Check your internet connection."
+                    else  -> "Sign-in failed (code ${e.statusCode}). Check your internet connection or Google Client ID configuration."
                 }
             }
         }
@@ -407,6 +605,7 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     fun proceedAsDemoHost() {
         vm.userName = "Jane Host"
         vm.userEmail = "jane.host.beamspot@gmail.com"
+        vm.isDemoMode = true
         vm.isSignedIn = true
         nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
     }
@@ -437,11 +636,75 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
             }
         }
 
+        // Terms & Conditions and Privacy Policy Checkbox (Item 19)
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.Checkbox(
+                    checked = termsAccepted,
+                    onCheckedChange = { termsAccepted = it },
+                    colors = androidx.compose.material3.CheckboxDefaults.colors(
+                        checkedColor = Cyan,
+                        uncheckedColor = PaperDim,
+                        checkmarkColor = Ink
+                    )
+                )
+                Spacer(Modifier.width(8.dp))
+                Row {
+                    Text("I agree to the ", color = PaperDim, fontSize = 13.sp)
+                    Text(
+                        text = "Terms of Service",
+                        color = Cyan,
+                        fontSize = 13.sp,
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                        modifier = Modifier.clickable {
+                            try {
+                                val baseUrl = BuildConfig.API_BASE_URL.removeSuffix("/")
+                                val termsUrl = "$baseUrl/terms"
+                                val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(termsUrl))
+                                context.startActivity(browserIntent)
+                            } catch (e: Exception) {
+                                android.util.Log.e("BeamSpot_SignIn", "Failed to open terms link", e)
+                            }
+                        }
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 40.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("and the ", color = PaperDim, fontSize = 13.sp)
+                Text(
+                    text = "Privacy Policy",
+                    color = Cyan,
+                    fontSize = 13.sp,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    modifier = Modifier.clickable {
+                        try {
+                            val baseUrl = BuildConfig.API_BASE_URL.removeSuffix("/")
+                            val privacyUrl = "$baseUrl/privacy"
+                            val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(privacyUrl))
+                            context.startActivity(browserIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("BeamSpot_SignIn", "Failed to open privacy link", e)
+                        }
+                    }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
         // Official Google Sign-In button style: white background, Google G, black text
         Surface(
-            onClick = { if (!isLoading) launchGoogleSignIn() },
+            onClick = { if (!isLoading && termsAccepted) launchGoogleSignIn() },
             shape = RoundedCornerShape(12.dp),
-            color = Color.White,
+            color = if (termsAccepted) Color.White else Color.White.copy(0.4f),
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) {
             Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
@@ -450,12 +713,12 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
                 } else {
                     GoogleGLogo()
                     Spacer(Modifier.width(12.dp))
-                    Text("Continue with Google", color = Color(0xFF1F1F1F), fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                    Text("Continue with Google", color = if (termsAccepted) Color(0xFF1F1F1F) else Color(0xFF1F1F1F).copy(0.4f), fontWeight = FontWeight.Medium, fontSize = 15.sp)
                 }
             }
         }
 
-        if (true) {
+        if (BuildConfig.DEBUG) {
             Spacer(Modifier.height(18.dp))
 
             // OR Divider
@@ -472,19 +735,22 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
 
             // Demo Bypass Button
             Button(
-                onClick = { proceedAsDemoHost() },
+                onClick = { if (termsAccepted) proceedAsDemoHost() },
+                enabled = termsAccepted,
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Panel,
-                    contentColor = Cyan
+                    contentColor = Cyan,
+                    disabledContainerColor = Panel.copy(0.4f),
+                    disabledContentColor = Cyan.copy(0.4f)
                 ),
-                border = BorderStroke(1.dp, Cyan.copy(0.4f)),
+                border = BorderStroke(1.dp, if (termsAccepted) Cyan.copy(0.4f) else Cyan.copy(0.15f)),
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Settings, null, tint = Cyan, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Filled.Settings, null, tint = if (termsAccepted) Cyan else Cyan.copy(0.4f), modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(10.dp))
-                    Text("Continue with Demo Account (Bypass)", color = Cyan, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("Continue with Demo Account (Bypass)", color = if (termsAccepted) Cyan else Cyan.copy(0.4f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 }
             }
 
@@ -495,20 +761,15 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
     }
 }
 
-// Proper Google G logo using coloured segments
+// Proper Google G logo using standard M3 Icon
 @Composable
 private fun GoogleGLogo() {
-    Canvas(Modifier.size(20.dp)) {
-        val gColors = listOf(
-            Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFFFBBC05), Color(0xFF34A853)
-        )
-        // Simplified G: draw a coloured circle with a white notch
-        drawCircle(Color(0xFF4285F4), radius = size.minDimension / 2)
-        // In practice you'd render the proper Google G path
-        // For a simple implementation, the full-colour G is best from a drawable resource
-    }
-    // As a fallback that looks correct: use the letter G in Google blue
-    Text("G", color = Color(0xFF4285F4), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    Icon(
+        imageVector = Icons.Filled.AccountCircle,
+        contentDescription = "Google Logo",
+        tint = Color(0xFF4285F4),
+        modifier = Modifier.size(24.dp)
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -516,6 +777,39 @@ private fun GoogleGLogo() {
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
 fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    val scope = rememberCoroutineScope()
+    var isLoading by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        if (RetrofitClient.getToken() != null) {
+            isLoading = true
+            try {
+                val payout = RetrofitClient.apiService.getPayout()
+                payout.payoutMethod?.let { vm.payoutMethod = it }
+                payout.payoutNumber?.let { vm.payoutNumber = it }
+                payout.bankName?.let { vm.bankName = it }
+                payout.bankAccount?.let { vm.bankAccount = it }
+                payout.bankHolder?.let { vm.bankHolder = it }
+            } catch (e: Exception) {
+                android.util.Log.e("PayoutSetupScreen", "Failed to load payout details", e)
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    val phoneRegex = remember { Regex("^(?:\\+?254|0)(7|1)\\d{8}$") }
+    val isPhoneValid = phoneRegex.matches(vm.payoutNumber.replace(" ", ""))
+
+    val isFormValid = when (vm.payoutMethod) {
+        "mpesa", "airtel" -> vm.payoutNumber.isNotBlank() && isPhoneValid
+        "bank" -> vm.bankName.isNotBlank() && vm.bankAccount.isNotBlank() && vm.bankHolder.isNotBlank()
+        "card" -> true
+        else -> false
+    }
+
     Column(
         Modifier.fillMaxSize().background(Ink)
             .verticalScroll(rememberScrollState()).padding(24.dp)
@@ -526,6 +820,20 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
         Text("Where should we send your money?", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         Text("Earnings go directly to your chosen account when you withdraw.", color = PaperDim, fontSize = 13.sp)
+        
+        if (isLoading) {
+            Spacer(Modifier.height(16.dp))
+            androidx.compose.material3.CircularProgressIndicator(
+                color = Cyan, 
+                modifier = Modifier.align(Alignment.CenterHorizontally).size(24.dp)
+            )
+        }
+
+        if (errorMessage.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text(errorMessage, color = Color(0xFFEF5350), fontSize = 13.sp, modifier = Modifier.fillMaxWidth())
+        }
+
         Spacer(Modifier.height(24.dp))
 
         // Payout method cards
@@ -562,6 +870,10 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
                     placeholder = "e.g. 0712 345 678",
                     keyboardType = KeyboardType.Phone
                 )
+                if (vm.payoutNumber.isNotBlank() && !isPhoneValid) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Enter a valid Kenyan number (e.g. 0712345678 or +254...)", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                }
             }
             "bank" -> {
                 BeamLabel("Bank Name")
@@ -580,8 +892,32 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
         Spacer(Modifier.height(32.dp))
 
-        BeamButton("Continue — Choose how to share →", Cyan) {
-            nav.navigate(Route.MODE_SELECT)
+        BeamButton(if (isSaving) "Saving…" else "Continue", Cyan, enabled = isFormValid && !isSaving && !isLoading) {
+            if (RetrofitClient.getToken() == null) {
+                nav.navigate(Route.MODE_SELECT)
+                return@BeamButton
+            }
+            isSaving = true
+            errorMessage = ""
+            scope.launch {
+                try {
+                    RetrofitClient.apiService.savePayout(
+                        PayoutDetailsRequest(
+                            payoutMethod = vm.payoutMethod,
+                            payoutNumber = vm.payoutNumber,
+                            bankName = if (vm.payoutMethod == "bank") vm.bankName else null,
+                            bankAccount = if (vm.payoutMethod == "bank") vm.bankAccount else null,
+                            bankHolder = if (vm.payoutMethod == "bank") vm.bankHolder else null
+                        )
+                    )
+                    nav.navigate(Route.MODE_SELECT)
+                } catch (e: Exception) {
+                    errorMessage = "Failed to save: ${e.localizedMessage ?: "Unknown error"}"
+                    android.util.Log.e("PayoutSetupScreen", "Failed to save payout", e)
+                } finally {
+                    isSaving = false
+                }
+            }
         }
     }
 }
@@ -626,8 +962,8 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
             BeamButton("Configure Setup →", Cyan) {
                 when (vm.selectedMode) {
                     "smart_bridge" -> nav.navigate(Route.SB_WIFI_SCAN)
-                    "router"       -> { /* Router setup flow */ }
-                    "hotspot"      -> { /* Hotspot setup flow */ }
+                    "router"       -> nav.navigate(Route.SB_NAMING)
+                    "hotspot"      -> nav.navigate(Route.SB_PERMISSIONS)
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -693,6 +1029,10 @@ fun SmartBridgeWifiScanScreen(nav: NavHostController, vm: AppViewModel) {
 
     fun startScan() {
         scanError = ""
+        if (!helper.isLocationEnabled()) {
+            scanError = "System Location is turned off. Please turn on Location in your device's settings or quick settings to scan for WiFi networks."
+            return
+        }
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!granted) {
             locationPermLauncher.launch(arrayOf(
@@ -845,6 +1185,26 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
                 }
             )
         }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                isConnecting = false
+                nav.navigate(Route.SB_PERMISSIONS)
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Panel,
+                contentColor = Amber
+            ),
+            border = BorderStroke(1.dp, Amber.copy(0.4f))
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.SkipNext, null, tint = Amber, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Skip WiFi Validation & Force Proceed", color = Amber, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            }
+        }
     }
 }
 
@@ -965,6 +1325,7 @@ fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
                 // Start the VPN service (real Android service start)
                 val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
                     action = BeamSpotVpnService.ACTION_START
+                    putExtra("EXTRA_LISTING_ID", vm.activeListingId)
                 }
                 context.startService(vpnIntent)
                 delay(1200)
@@ -995,6 +1356,45 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
 
     var showPriceDialog by remember { mutableStateOf(false) }
     var tempPrice by remember { mutableStateOf(vm.pricePerMin.toFloat()) }
+    var showWithdrawSuccessDialog by remember { mutableStateOf(false) }
+    var showWithdrawErrorDialog by remember { mutableStateOf("") }
+    var isWithdrawing by remember { mutableStateOf(false) }
+
+    if (showWithdrawSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showWithdrawSuccessDialog = false },
+            title = { Text("Withdrawal Request Sent", color = Paper, fontWeight = FontWeight.Bold) },
+            text = { Text("Your payout has been initiated successfully to your configured payout method (${vm.payoutMethod.uppercase()}: ${vm.payoutNumber}). It will arrive in your account shortly.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = { showWithdrawSuccessDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)
+                ) {
+                    Text("OK", fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    if (showWithdrawErrorDialog.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showWithdrawErrorDialog = "" },
+            title = { Text("Withdrawal Failed", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold) },
+            text = { Text("An error occurred while trying to process your withdrawal: $showWithdrawErrorDialog. Please try again later.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = { showWithdrawErrorDialog = "" },
+                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper)
+                ) {
+                    Text("Close")
+                }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
 
     if (showPriceDialog) {
         AlertDialog(
@@ -1068,11 +1468,31 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
                 Text("BeamSpot", color = Cyan, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold)
                 Text(vm.userName, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
-            Surface(shape = RoundedCornerShape(20.dp), color = if (vm.vpnActive) Cyan.copy(0.12f) else PaperDim.copy(0.1f)) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.vpnActive) Cyan else PaperDim))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(shape = RoundedCornerShape(20.dp), color = if (vm.vpnActive) Cyan.copy(0.12f) else PaperDim.copy(0.1f)) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.vpnActive) Cyan else PaperDim))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                IconButton(
+                    onClick = {
+                        if (vm.vpnActive) {
+                            val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                                action = BeamSpotVpnService.ACTION_STOP
+                            }
+                            context.startService(vpnIntent)
+                            vm.vpnActive = false
+                        }
+                        vm.logout()
+                        nav.navigate(Route.LANDING) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Filled.Logout, contentDescription = "Logout", tint = Color(0xFFEF5350))
                 }
             }
         }
@@ -1128,6 +1548,32 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
             Spacer(Modifier.height(12.dp))
         }
 
+        // High Guest Count Warning Note (Item 21)
+        if (vm.guestCount > 5) {
+            Surface(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF3E2723), // Dark warm brown/amber tone for warning
+                border = BorderStroke(1.dp, Amber.copy(0.4f))
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Filled.Warning, null, tint = Amber, modifier = Modifier.size(20.dp).padding(top = 2.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("High Guest Connections Note", color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "You currently have ${vm.guestCount} active guests. This level of activity can consume significant battery and mobile data. Consider keeping your device plugged into power and ensure you are on an unlimited data plan.",
+                            color = PaperDim,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+
         // Real stats grid
         Column(Modifier.padding(horizontal = 20.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1147,7 +1593,34 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
             Spacer(Modifier.height(10.dp))
             StatCard("Today's Earnings", "KSh ${String.format("%.2f", vm.todayEarnings)}", Icons.Filled.AccountBalanceWallet, Cyan, Modifier.fillMaxWidth())
             Spacer(Modifier.height(20.dp))
-            BeamButton("Withdraw to ${vm.payoutMethod.uppercase()}", Cyan) { /* withdrawal flow */ }
+            BeamButton(
+                label = if (isWithdrawing) "Processing Withdraw…" else "Withdraw to ${vm.payoutMethod.uppercase()}",
+                color = Cyan,
+                enabled = !isWithdrawing
+            ) {
+                isWithdrawing = true
+                if (vm.isDemoMode) {
+                    scope.launch {
+                        delay(1500)
+                        isWithdrawing = false
+                        showWithdrawSuccessDialog = true
+                        vm.todayEarnings = 0.0
+                    }
+                } else {
+                    scope.launch {
+                        try {
+                            RetrofitClient.apiService.withdrawEarnings()
+                            showWithdrawSuccessDialog = true
+                            vm.todayEarnings = 0.0
+                        } catch (e: Exception) {
+                            android.util.Log.e("Withdraw", "Failed to withdraw earnings", e)
+                            showWithdrawErrorDialog = e.localizedMessage ?: "Network error"
+                        } finally {
+                            isWithdrawing = false
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = {
@@ -1238,7 +1711,15 @@ private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifie
         border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine)
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(12.dp)) {
-            Text(label, color = if (selected) Cyan else PaperDim, fontSize = 12.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+            Text(
+                label,
+                color = if (selected) Cyan else PaperDim,
+                fontSize = if (label.length > 8) 10.sp else 12.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }
@@ -1696,7 +2177,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                     selectedPackageMins = mins
                                     selectedPackagePrice = (mins * spot.pricePerMin).roundToInt()
                                 },
-                                valueRange = 5f..180f,
+                                valueRange = 1f..180f,
                                 colors = SliderDefaults.colors(
                                     thumbColor = Amber,
                                     activeTrackColor = Amber,
@@ -1707,7 +2188,7 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("5 mins", color = PaperDim, fontSize = 10.sp)
+                                Text("1 min", color = PaperDim, fontSize = 10.sp)
                                 Text("180 mins", color = PaperDim, fontSize = 10.sp)
                             }
 
@@ -1958,7 +2439,8 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                                                     durationMin = selectedPackageMins,
                                                     paymentMethod = "mpesa",
                                                     phone = mpesaPhone,
-                                                    guestIp = localIp
+                                                    guestIp = localIp,
+                                                    testBypassPassword = if (vm.isDemoMode) "beamspot-test-2026" else null
                                                 )
                                                 val sessionResp = RetrofitClient.apiService.createSession(sessionReq)
                                                 

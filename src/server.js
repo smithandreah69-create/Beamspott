@@ -14,6 +14,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
 
 // ─── Database ─────────────────────────────────────────────────────────────
@@ -101,10 +102,31 @@ app.post('/api/hosts/payout', requireAuth, async (req, res) => {
     res.json({ ok: true });
 });
 
+// Get payout details
+app.get('/api/hosts/payout', requireAuth, async (req, res) => {
+    const user = (await db.query(
+        'SELECT payout_provider, payout_number, bank_name, bank_account, bank_holder FROM users WHERE id=$1',
+        [req.user.userId]
+    )).rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+        payout_provider: user.payout_provider,
+        payout_number: user.payout_number,
+        bank_name: user.bank_name,
+        bank_account: user.bank_account,
+        bank_holder: user.bank_holder,
+        payoutMethod: user.payout_provider,
+        payoutNumber: user.payout_number,
+        bankName: user.bank_name,
+        bankAccount: user.bank_account,
+        bankHolder: user.bank_holder
+    });
+});
+
 function getMaxGuests(connectionType) {
-    if (connectionType === 'SMART_BRIDGE') return 4;
-    if (connectionType === 'MOBILE_HOTSPOT') return 5;
-    return 10; // HOME_ROUTER / fallback
+    if (connectionType === 'SMART_BRIDGE') return 30;
+    if (connectionType === 'MOBILE_HOTSPOT') return 30;
+    return 30; // HOME_ROUTER / fallback
 }
 
 // Create / update a listing (host registering their network)
@@ -165,6 +187,18 @@ app.patch('/api/listings/:id/sharing', requireAuth, async (req, res) => {
 app.patch('/api/listings/:id/price', requireAuth, async (req, res) => {
     const { pricePerMin } = req.body;
     await db.query(`UPDATE listings SET price_per_min=$1 WHERE id=$2 AND host_id=$3`, [pricePerMin, req.params.id, req.user.userId]);
+    res.json({ ok: true });
+});
+
+// Release a claimed network (delete listing)
+app.delete('/api/listings/:id', requireAuth, async (req, res) => {
+    const result = await db.query(
+        'DELETE FROM listings WHERE id=$1 AND host_id=$2 RETURNING id',
+        [req.params.id, req.user.userId]
+    );
+    if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'Listing not found' });
+    }
     res.json({ ok: true });
 });
 
@@ -292,8 +326,42 @@ app.post('/api/networks/verify', guestLimit, async (req, res) => {
 // Create a session (guest picks duration, initiates payment)
 app.post('/api/sessions', guestLimit, async (req, res) => {
     const { listingId, guestDeviceId, durationMin, paymentMethod, phone } = req.body;
-    if (!listingId || !durationMin || durationMin < 15 || durationMin > 1440)
+    if (!listingId || !durationMin || durationMin < 1 || durationMin > 1440) // TEMPORARY for testing — restore to 15 before production launch
         return res.status(400).json({ error: 'Invalid session parameters' });
+
+    // Phone number validation & normalization (Item 26)
+    const isBypass = req.body.testBypassPassword === "beamspot-test-2026";
+    let normalizedPhone = '';
+    if (!isBypass) {
+        if (!phone) {
+            return res.status(400).json({ error: 'Phone number is required for payments' });
+        }
+        const phoneRegex = /^(?:\+?254|0)(7|1)\d{8}$/;
+        if (!phoneRegex.test(phone)) {
+            return res.status(400).json({ error: 'Enter a valid Safaricom/Airtel number (e.g. 0712345678)' });
+        }
+        const cleanPhone = phone.replace(/\D/g, '');
+        if (cleanPhone.startsWith('0')) {
+            normalizedPhone = '254' + cleanPhone.slice(1);
+        } else if (cleanPhone.startsWith('254')) {
+            normalizedPhone = cleanPhone;
+        } else {
+            normalizedPhone = '254' + cleanPhone;
+        }
+    } else if (phone) {
+        const phoneRegex = /^(?:\+?254|0)(7|1)\d{8}$/;
+        if (!phoneRegex.test(phone)) {
+            return res.status(400).json({ error: 'Invalid phone number format.' });
+        }
+        const cleanPhone = phone.replace(/\D/g, '');
+        if (cleanPhone.startsWith('0')) {
+            normalizedPhone = '254' + cleanPhone.slice(1);
+        } else if (cleanPhone.startsWith('254')) {
+            normalizedPhone = cleanPhone;
+        } else {
+            normalizedPhone = '254' + cleanPhone;
+        }
+    }
 
     // Block double purchase on same listing for same device
     const active = (await db.query(
@@ -323,8 +391,31 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
     const session = (await db.query(
         `INSERT INTO sessions (listing_id, guest_device_id, duration_min, amount_total, platform_fee, host_payout, status)
          VALUES ($1,$2,$3,$4,$5,$6,'PENDING_PAYMENT') RETURNING id`,
-        [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout]
+         [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout]
     )).rows[0];
+
+    // TEST MODE ONLY — remove before wiring up real payment
+    if (req.body.testBypassPassword === "beamspot-test-2026") {
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + durationMin * 60_000);
+        await db.query(
+            `UPDATE sessions SET status='CONNECTED', started_at=$1, expires_at=$2 WHERE id=$3`,
+            [now, expiresAt, session.id]
+        );
+        await db.query(
+            `INSERT INTO router_actions (listing_id, guest_device_id, action, expires_at)
+             VALUES ($1,$2,'authorize',$3)`,
+            [listingId, guestDeviceId, expiresAt]
+        ).catch(() => {});
+        return res.json({ 
+            sessionId: session.id, 
+            amountTotal, 
+            platformFee, 
+            hostPayout, 
+            checkoutUrl: null, 
+            testMode: true 
+        });
+    }
 
     // Create IntaSend checkout and return checkoutUrl
     let checkoutUrl = null;
@@ -342,7 +433,7 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
                 email: req.body.email || 'guest@beamspot.com',
                 first_name: 'BeamSpot',
                 last_name: 'Guest',
-                phone_number: phone || '',
+                phone_number: normalizedPhone || '',
                 host: process.env.PUBLIC_BASE_URL || 'http://localhost:3000',
                 redirect_url: `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/api/sessions/callback`,
                 api_ref: `beamspot-sess-${session.id}`
@@ -494,6 +585,16 @@ app.get('/', (_, res) => res.json({
 // Health check
 // ─────────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+
+// Serve terms document (Item 25)
+app.get('/terms', (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/terms.html'));
+});
+
+// Serve privacy policy document
+app.get('/privacy', (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/privacy.html'));
+});
 
 // Serve guest payment page for all non-API routes (SPA fallback)
 app.get('*', (req, res) => {

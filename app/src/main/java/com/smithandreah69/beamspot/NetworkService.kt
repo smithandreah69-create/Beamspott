@@ -58,7 +58,8 @@ data class CreateSessionRequest(
     val durationMin: Int,
     val paymentMethod: String,
     val phone: String,
-    val guestIp: String? = null
+    val guestIp: String? = null,
+    val testBypassPassword: String? = null
 )
 
 data class CreateSessionResponse(
@@ -89,6 +90,22 @@ data class HostStatsResponse(
     val pendingWithdrawal: Double
 )
 
+data class PayoutDetailsRequest(
+    val payoutMethod: String,
+    val payoutNumber: String,
+    val bankName: String?,
+    val bankAccount: String?,
+    val bankHolder: String?
+)
+
+data class PayoutDetailsResponse(
+    val payoutMethod: String?,
+    val payoutNumber: String?,
+    val bankName: String?,
+    val bankAccount: String?,
+    val bankHolder: String?
+)
+
 // ─── Retrofit Service Interface ──────────────────────────────────────────
 
 interface ApiService {
@@ -109,6 +126,15 @@ interface ApiService {
 
     @GET("api/hosts/sessions/pending")
     suspend fun getPendingSessions(): List<PendingSessionResponse>
+
+    @POST("api/hosts/payout")
+    suspend fun savePayout(@Body request: PayoutDetailsRequest): Any
+
+    @GET("api/hosts/payout")
+    suspend fun getPayout(): PayoutDetailsResponse
+
+    @POST("api/hosts/withdraw")
+    suspend fun withdrawEarnings(): Any
 }
 
 // ─── Retrofit Client Singleton ────────────────────────────────────────────

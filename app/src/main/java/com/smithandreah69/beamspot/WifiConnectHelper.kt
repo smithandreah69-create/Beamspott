@@ -49,7 +49,9 @@ class WifiConnectHelper(private val context: Context) {
             val timeoutRunnable = Runnable {
                 if (isFinished.compareAndSet(false, true)) {
                     callback?.let { connectivityManager.unregisterNetworkCallback(it) }
-                    onFailure("Connection timed out. Please check the password and make sure you are in range.")
+                    handler.post {
+                        onFailure("Connection timed out. Please check the password and make sure you are in range.")
+                    }
                 }
             }
 
@@ -59,7 +61,9 @@ class WifiConnectHelper(private val context: Context) {
                     if (isFinished.compareAndSet(false, true)) {
                         handler.removeCallbacks(timeoutRunnable)
                         connectivityManager.bindProcessToNetwork(network)
-                        onSuccess()
+                        handler.post {
+                            onSuccess()
+                        }
                     }
                 }
 
@@ -67,7 +71,9 @@ class WifiConnectHelper(private val context: Context) {
                     super.onUnavailable()
                     if (isFinished.compareAndSet(false, true)) {
                         handler.removeCallbacks(timeoutRunnable)
-                        onFailure("Network unavailable. Wrong password or network is out of range.")
+                        handler.post {
+                            onFailure("Network unavailable. This can happen if the password is wrong, if the network is out of range, or if Android rejected the connection because it has no internet access yet. If you are sure the password is correct, click 'Skip WiFi Validation' below to force proceed.")
+                        }
                     }
                 }
 

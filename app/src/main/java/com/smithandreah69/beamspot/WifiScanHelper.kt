@@ -47,6 +47,21 @@ class WifiScanHelper(private val context: Context) {
     private val wifiManager =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
+    fun isLocationEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+            return locationManager?.isLocationEnabled ?: false
+        } else {
+            @Suppress("DEPRECATION")
+            val mode = android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                android.provider.Settings.Secure.LOCATION_MODE,
+                android.provider.Settings.Secure.LOCATION_MODE_OFF
+            )
+            return mode != android.provider.Settings.Secure.LOCATION_MODE_OFF
+        }
+    }
+
     // ─── Scan nearby networks ───────────────────────────────────────────────
     // Returns actual nearby WiFi networks with real RSSI, SSID, security type.
     // Requires ACCESS_FINE_LOCATION permission to be granted before calling.

@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     listing_id       UUID NOT NULL REFERENCES listings(id),
     guest_device_id  TEXT NOT NULL,             -- MAC address or device fingerprint
-    duration_min     INT NOT NULL CHECK (duration_min >= 15 AND duration_min <= 1440),
+    duration_min     INT NOT NULL CHECK (duration_min >= 1 AND duration_min <= 1440),
     amount_total     NUMERIC(10,2) NOT NULL,
     platform_fee     NUMERIC(10,2) NOT NULL,    -- 5%
     host_payout      NUMERIC(10,2) NOT NULL,    -- 95%
