@@ -28,7 +28,7 @@ android {
         throw GradleException("GOOGLE_WEB_CLIENT_ID environment variable is missing for the release build!")
     }
     buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
-    buildConfigField("String", "API_BASE_URL", "\"https://beamspot.up.railway.app/\"")
+    buildConfigField("String", "API_BASE_URL", "\"https://beamspott.up.railway.app/\"")
   }
 
   signingConfigs {

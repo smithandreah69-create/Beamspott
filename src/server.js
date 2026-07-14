@@ -481,6 +481,16 @@ setInterval(async () => {
 }, 30_000);
 
 // ─────────────────────────────────────────────────────────────────────────
+// Root URL
+// ─────────────────────────────────────────────────────────────────────────
+app.get('/', (_, res) => res.json({
+    app: 'BeamSpot API',
+    version: '1.0',
+    status: 'running',
+    endpoints: ['/health', '/api/auth/google', '/api/networks/verify', '/api/sessions']
+}));
+
+// ─────────────────────────────────────────────────────────────────────────
 // Health check
 // ─────────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
