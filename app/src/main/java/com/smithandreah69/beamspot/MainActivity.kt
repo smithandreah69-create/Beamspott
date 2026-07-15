@@ -337,6 +337,70 @@ private fun BeamSpotTheme(content: @Composable () -> Unit) {
     )
 }
 
+// ─── Reusable components ─────────────────────────────────────────────────
+@Composable
+private fun StepBadge(text: String) {
+    Surface(shape = RoundedCornerShape(20.dp), color = Cyan.copy(0.1f)) {
+        Text(text, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+    }
+}
+
+@Composable
+private fun TopBar(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Paper) }
+        Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+    }
+}
+
+@Composable
+private fun BeamLabel(text: String) {
+    Text(text, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 5.dp))
+}
+
+@Composable
+private fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text(placeholder, color = PaperDim) },
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Paper, unfocusedTextColor = Paper,
+            focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
+            cursorColor = Cyan
+        ),
+        shape = RoundedCornerShape(12.dp),
+        singleLine = true
+    )
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun BeamButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick, enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(50.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = color, disabledContainerColor = color.copy(0.3f))
+    ) {
+        Text(label, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick, modifier = modifier,
+        shape = RoundedCornerShape(12.dp), color = Panel,
+        border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(12.dp)) {
+            Text(label, color = if (selected) Cyan else PaperDim, fontSize = 12.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+        }
+    }
+}
+
 // ─── Root navigation ──────────────────────────────────────────────────────
 @Composable
 fun BeamSpotApp() {
