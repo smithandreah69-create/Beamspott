@@ -413,20 +413,32 @@ fun BeamSpotApp() {
     val startDest = remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        val token = sessionManager.getJwtToken()
+        val sharedPrefs = context.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+        val token = sessionManager.getJwtToken() ?: sharedPrefs.getString("jwt_token", null)
         val hasSetup = sessionManager.hasCompletedSetup()
-        if (token != null && hasSetup) {
+        if (token != null) {
             RetrofitClient.setToken(token)
             // Restore ViewModel state from DataStore
-            vm.userName = sessionManager.getUserName()
-            vm.userEmail = sessionManager.getUserEmail()
-            vm.isDemoMode = sessionManager.isDemoMode()
-            vm.activeListingId = sessionManager.getActiveListingId()
-            vm.selectedMode = sessionManager.getSelectedMode()
-            vm.beamSpotNetworkName = sessionManager.getBeamSpotNetworkName()
-            vm.pricePerMin = sessionManager.getPricePerMin()
+            val dmName = sessionManager.getUserName()
+            if (dmName.isNotEmpty()) vm.userName = dmName
+            val dmEmail = sessionManager.getUserEmail()
+            if (dmEmail.isNotEmpty()) vm.userEmail = dmEmail
+            vm.isDemoMode = sessionManager.isDemoMode() || sharedPrefs.getBoolean("is_demo_mode", false)
+            val dmListingId = sessionManager.getActiveListingId()
+            if (dmListingId.isNotEmpty()) vm.activeListingId = dmListingId
+            val dmMode = sessionManager.getSelectedMode()
+            if (dmMode.isNotEmpty()) vm.selectedMode = dmMode
+            val dmNetName = sessionManager.getBeamSpotNetworkName()
+            if (dmNetName.isNotEmpty()) vm.beamSpotNetworkName = dmNetName
+            val dmPrice = sessionManager.getPricePerMin()
+            if (dmPrice > 0) vm.pricePerMin = dmPrice
+            
             vm.isSignedIn = true
-            startDest.value = Route.MAIN_APP
+            if (hasSetup || vm.beamSpotNetworkName.isNotEmpty()) {
+                startDest.value = Route.MAIN_APP
+            } else {
+                startDest.value = Route.MODE_SELECT
+            }
         } else {
             startDest.value = Route.SPLASH
         }
@@ -554,9 +566,21 @@ fun SplashScreen(nav: NavHostController) {
         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
         label = "scale"
     )
+    val context = LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
     LaunchedEffect(Unit) {
         delay(2000)
-        nav.navigate(Route.LANDING) { popUpTo(Route.SPLASH) { inclusive = true } }
+        val token = sessionManager.getJwtToken()
+        val hasSetup = sessionManager.hasCompletedSetup()
+        if (token != null) {
+            if (hasSetup) {
+                nav.navigate(Route.MAIN_APP) { popUpTo(Route.SPLASH) { inclusive = true } }
+            } else {
+                nav.navigate(Route.MODE_SELECT) { popUpTo(Route.SPLASH) { inclusive = true } }
+            }
+        } else {
+            nav.navigate(Route.LANDING) { popUpTo(Route.SPLASH) { inclusive = true } }
+        }
     }
     Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -875,6 +899,7 @@ fun SignInScreen(nav: NavHostController, vm: AppViewModel) {
         vm.userEmail = "jane.host.beamspot@gmail.com"
         vm.isDemoMode = true
         vm.isSignedIn = true
+        vm.saveToken("demo_token")
         nav.navigate(Route.PAYOUT_SETUP) { popUpTo(Route.SIGN_IN) { inclusive = true } }
     }
 
@@ -1401,8 +1426,20 @@ private fun SignalBars(bars: Int) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// SMART BRIDGE: PASSWORD ENTRY
+// SMART BRIDGE: PASSWORD ENTRY & ACCOUNT-NETWORK LOCK ENFORCEMENT
 // ─────────────────────────────────────────────────────────────────────────
+fun checkAndLockNetwork(context: Context, ssid: String, userEmail: String): Result<Unit> {
+    if (ssid.isBlank()) return Result.success(Unit)
+    val locksPrefs = context.getSharedPreferences("beamspot_network_locks", Context.MODE_PRIVATE)
+    val lockedEmail = locksPrefs.getString(ssid, null)
+    if (lockedEmail != null && lockedEmail.lowercase() != userEmail.lowercase()) {
+        return Result.failure(Exception("This home WiFi network is already linked to another BeamSpot account ($lockedEmail). Each home network can only be linked to a single Gmail account. Please sign in with $lockedEmail or use a different home network."))
+    }
+    // Lock it to the current userEmail
+    locksPrefs.edit().putString(ssid, userEmail).apply()
+    return Result.success(Unit)
+}
+
 @Composable
 fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: String, bssid: String) {
     val decodedSsid = ssid.replace("%2F", "/")
@@ -1454,6 +1491,11 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
 
         Spacer(Modifier.weight(1f))
         BeamButton(if (isConnecting) "Connecting…" else "Connect & Create BeamSpot Network →", Cyan, enabled = password.isNotBlank() && !isConnecting) {
+            val lockRes = checkAndLockNetwork(context, decodedSsid, vm.userEmail)
+            if (lockRes.isFailure) {
+                connectError = lockRes.exceptionOrNull()?.message ?: "Network locked"
+                return@BeamButton
+            }
             isConnecting = true
             connectError = ""
             wifiConnectHelper.connect(
@@ -1472,6 +1514,11 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = {
+                val lockRes = checkAndLockNetwork(context, decodedSsid, vm.userEmail)
+                if (lockRes.isFailure) {
+                    connectError = lockRes.exceptionOrNull()?.message ?: "Network locked"
+                    return@Button
+                }
                 isConnecting = false
                 nav.navigate(Route.SB_PERMISSIONS)
             },
@@ -1923,6 +1970,42 @@ fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
+                    Spacer(Modifier.height(14.dp))
+                    HorizontalDivider(color = BorderLine)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "⚠️ If nearby devices cannot see \"$displaySsid\", your device may be broadcasting using its hardware-default name. In some Android versions, you must manually matching-rename your hotspot SSID to \"$displaySsid\" and toggle Hotspot ON in system settings.",
+                        color = Amber,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            val intent = Intent().apply {
+                                action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                try {
+                                    val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(fallbackIntent)
+                                } catch (_: Exception) {}
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Amber.copy(0.12f), contentColor = Amber),
+                        border = BorderStroke(1.dp, Amber.copy(0.3f)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                    ) {
+                        Icon(Icons.Filled.Settings, null, tint = Amber, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open Hotspot & Tethering Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -2268,9 +2351,13 @@ fun EarningsScreen(rootNav: NavHostController, vm: AppViewModel) {
 @Composable
 fun SettingsScreen(rootNav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val sessionManager = remember { SessionManager(context) }
+    
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var showStopSharingConfirm by remember { mutableStateOf(false) }
     var showPayoutEdit by remember { mutableStateOf(false) }
+    var showDeletePurgeConfirm by remember { mutableStateOf(false) }
 
     var showPriceDialogInSettings by remember { mutableStateOf(false) }
     var tempSettingsPrice by remember { mutableStateOf(vm.pricePerMin.toFloat()) }
@@ -2517,6 +2604,24 @@ fun SettingsScreen(rootNav: NavHostController, vm: AppViewModel) {
                 subtitle = "1.0.0",
                 onClick = { showVersionDialog = true }
             )
+            SettingsItem(
+                icon = Icons.Filled.Explore,
+                title = "Launch Landing Welcome Tour",
+                subtitle = "Revisit the initial landing tutorial and features overview",
+                onClick = { rootNav.navigate(Route.LANDING) }
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        SettingsSection("Danger Zone") {
+            SettingsItem(
+                icon = Icons.Filled.Delete,
+                title = "Delete Account & Purge Data",
+                subtitle = "Permanently delete your profile, clear locks, logs & reset app",
+                iconTint = Color(0xFFEF5350),
+                onClick = { showDeletePurgeConfirm = true }
+            )
         }
 
         Spacer(Modifier.height(32.dp))
@@ -2696,6 +2801,55 @@ fun SettingsScreen(rootNav: NavHostController, vm: AppViewModel) {
                     onClick = { showVersionDialog = false },
                     colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper)
                 ) { Text("OK") }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    // Delete Account & Purge Data confirmation dialog (Danger Zone)
+    if (showDeletePurgeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeletePurgeConfirm = false },
+            title = { Text("Purge All Data & Reset", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold) },
+            text = { Text("This will permanently delete your profile, erase your home network locks, delete all logs/earnings records, stop active sharing, and reset the app back to factory settings.\n\nAre you sure you want to completely erase everything?", color = Paper, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeletePurgeConfirm = false
+                        scope.launch {
+                            if (vm.vpnActive) {
+                                val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                                    action = BeamSpotVpnService.ACTION_STOP
+                                }
+                                try { context.startService(vpnIntent) } catch (_: Exception) {}
+                                vm.vpnActive = false
+                            }
+                            // Purge DataStore
+                            sessionManager.clearAll()
+                            // Purge standard SharedPreferences
+                            val sharedPrefs = context.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                            sharedPrefs.edit().clear().apply()
+                            // Purge network locks
+                            context.getSharedPreferences("beamspot_network_locks", Context.MODE_PRIVATE).edit().clear().apply()
+                            
+                            // Reset ViewModel variables
+                            vm.logout() // resets isSignedIn, userName, userEmail, clears standard prefs
+                            vm.vpnActive = false
+                            vm.beamSpotNetworkName = ""
+                            vm.pricePerMin = 2.0
+                            
+                            // Navigate to Landing
+                            rootNav.navigate(Route.LANDING) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828), contentColor = Paper)
+                ) { Text("Purge Everything", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeletePurgeConfirm = false }) { Text("Cancel", color = PaperDim) }
             },
             containerColor = Panel,
             shape = RoundedCornerShape(18.dp)
