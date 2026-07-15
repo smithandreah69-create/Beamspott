@@ -187,6 +187,7 @@ class BeamSpotVpnService : VpnService() {
         }
     }
 
+    @android.annotation.SuppressLint("MissingPermission")
     private fun startHotspot() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!android.provider.Settings.System.canWrite(applicationContext)) {

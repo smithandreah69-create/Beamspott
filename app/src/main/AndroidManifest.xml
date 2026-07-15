@@ -60,7 +60,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- ─── Read network traffic stats (speed measurement) ───────── -->
-    <uses-permission android:name="android.permission.READ_NETWORK_USAGE_HISTORY" />
+    <uses-permission android:name="android.permission.READ_NETWORK_USAGE_HISTORY" tools:ignore="ProtectedPermissions" />
 
     <!-- ─── Modify system settings (WRITE_SETTINGS) for hotspot control ── -->
     <!--

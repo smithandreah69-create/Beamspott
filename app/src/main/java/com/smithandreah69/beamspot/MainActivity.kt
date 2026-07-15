@@ -339,14 +339,14 @@ private fun BeamSpotTheme(content: @Composable () -> Unit) {
 
 // ─── Reusable components ─────────────────────────────────────────────────
 @Composable
-private fun StepBadge(text: String) {
+fun StepBadge(text: String) {
     Surface(shape = RoundedCornerShape(20.dp), color = Cyan.copy(0.1f)) {
         Text(text, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
     }
 }
 
 @Composable
-private fun TopBar(title: String, onBack: () -> Unit) {
+fun TopBar(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Paper) }
         Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
@@ -354,12 +354,12 @@ private fun TopBar(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun BeamLabel(text: String) {
+fun BeamLabel(text: String) {
     Text(text, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 5.dp))
 }
 
 @Composable
-private fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
+fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
     OutlinedTextField(
         value = value, onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth(),
@@ -377,7 +377,7 @@ private fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholde
 }
 
 @Composable
-private fun BeamButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
+fun BeamButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick, enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -389,7 +389,7 @@ private fun BeamButton(label: String, color: Color, enabled: Boolean = true, onC
 }
 
 @Composable
-private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick, modifier = modifier,
         shape = RoundedCornerShape(12.dp), color = Panel,
@@ -476,12 +476,13 @@ fun MainAppScreen(rootNav: NavHostController, vm: AppViewModel) {
     Scaffold(
         containerColor = Ink,
         bottomBar = {
-            NavigationBar(
-                containerColor = Panel,
-                contentColor = Paper,
-                tonalElevation = 0.dp,
-                border = BorderStroke(0.5.dp, BorderLine)
-            ) {
+            Column {
+                HorizontalDivider(color = BorderLine, thickness = 0.5.dp)
+                NavigationBar(
+                    containerColor = Panel,
+                    contentColor = Paper,
+                    tonalElevation = 0.dp
+                ) {
                 BottomTab.entries.forEach { tab ->
                     val isSelected = selectedTab == tab
                     NavigationBarItem(
@@ -520,7 +521,8 @@ fun MainAppScreen(rootNav: NavHostController, vm: AppViewModel) {
                 }
             }
         }
-    ) { innerPadding ->
+    }
+) { innerPadding ->
         NavHost(
             navController = tabNav,
             startDestination = BottomTab.DASHBOARD.route,
