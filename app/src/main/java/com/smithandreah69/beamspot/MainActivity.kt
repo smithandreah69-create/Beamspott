@@ -44,7 +44,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.max
 import androidx.core.content.ContextCompat
 import android.content.Context
 import android.app.Application
