@@ -2868,6 +2868,104 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
 // HOTSPOT SETUP: CLASSIC PHONE HOTSPOT INSTRUCTIONS (Steps 1–4)
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
+fun HotspotStepItem(
+    stepNumber: Int,
+    title: String,
+    difficulty: String, // "Easy", "Moderate", "Risky"
+    difficultyColor: Color,
+    whatItDoes: String,
+    whyItNeeded: String,
+    fallback: String,
+    isCompleted: Boolean,
+    isActive: Boolean,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (isActive) Panel else Panel.copy(alpha = 0.3f),
+        border = BorderStroke(
+            1.dp,
+            if (isCompleted) Cyan.copy(0.4f) else if (isActive) BorderLine else BorderLine.copy(alpha = 0.15f)
+        ),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isCompleted) Cyan else if (isActive) Amber else BorderLine.copy(alpha = 0.4f),
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isCompleted) {
+                                Icon(Icons.Filled.Check, null, tint = Ink, modifier = Modifier.size(14.dp))
+                            } else {
+                                Text(
+                                    stepNumber.toString(),
+                                    color = if (isActive) Ink else PaperDim,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        title,
+                        color = if (isActive) Paper else if (isCompleted) PaperDim else PaperDim.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+
+                if (isActive) {
+                    // Difficulty badge
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = difficultyColor.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, difficultyColor.copy(alpha = 0.3f)),
+                        modifier = Modifier.padding(start = 8.dp)
+                    ) {
+                        Text(
+                            text = difficulty,
+                            color = difficultyColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            if (isActive) {
+                Spacer(Modifier.height(12.dp))
+                // Info block
+                Text("📋 What this does:", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text(whatItDoes, color = Paper, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 8.dp))
+
+                Text("💡 Why it's needed:", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text(whyItNeeded, color = PaperDim, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 12.dp))
+
+                // Custom step content
+                content()
+
+                if (fallback.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("⚠️ Fallback / Troubleshooting:", color = Color(0xFFEF5350), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    Text(fallback, color = PaperDim, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2881,9 +2979,9 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
     // Status states
     var isCellularActive by remember { mutableStateOf(false) }
-    var isCheckingData by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf("") }
     var hotspotTurnedOn by remember { mutableStateOf(false) }
+    var connectedClientsList by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // Helper to check for Cellular Data (TRANSPORT_CELLULAR)
     fun checkCellularData(): Boolean {
@@ -2919,6 +3017,65 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 active
             } catch (_: Exception) {
                 false
+            }
+        }
+    }
+
+    // Helper to read /proc/net/arp and get non-zero MAC addresses
+    fun getConnectedArpClients(): List<String> {
+        return try {
+            val file = java.io.File("/proc/net/arp")
+            if (file.exists()) {
+                file.readLines()
+                    .drop(1) // skip header
+                    .mapNotNull { line ->
+                        val parts = line.trim().split("\\s+".toRegex())
+                        if (parts.size >= 4) {
+                            val mac = parts[3]
+                            if (mac.isNotEmpty() && mac != "00:00:00:00:00:00" && mac.contains(":")) {
+                                mac
+                            } else null
+                        } else null
+                    }
+            } else emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // Sequential Polling Loops using LaunchedEffect
+    LaunchedEffect(activeStep) {
+        if (activeStep == 1) {
+            while (activeStep == 1) {
+                val hasData = checkCellularData()
+                if (hasData) {
+                    isCellularActive = true
+                    activeStep = 2
+                }
+                delay(2000)
+            }
+        }
+    }
+
+    LaunchedEffect(activeStep) {
+        if (activeStep == 3) {
+            while (activeStep == 3) {
+                val enabled = isNativeHotspotEnabled()
+                if (enabled) {
+                    hotspotTurnedOn = true
+                    activeStep = 4
+                }
+                delay(2000)
+            }
+        }
+    }
+
+    LaunchedEffect(activeStep) {
+        if (activeStep == 4) {
+            while (activeStep == 4) {
+                val clients = getConnectedArpClients()
+                connectedClientsList = clients
+                delay(2000)
             }
         }
     }
@@ -2961,47 +3118,56 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         // ─────────────────────────────────────────────────────────────────────
         // STEP 1: MOBILE DATA CELLULAR CHECK
         // ─────────────────────────────────────────────────────────────────────
-        WizardStepItem(
+        HotspotStepItem(
             stepNumber = 1,
             title = "Verify Cellular Internet Connectivity",
             difficulty = "Easy",
             difficultyColor = Cyan,
             whatItDoes = "Verifies if your phone's mobile cellular internet interface is active and receiving telemetry signals.",
             whyItNeeded = "Guests need an active internet pipe to route their traffic. Wi-Fi sharing requires your phone to get internet from the carrier SIM.",
-            fallback = "If toggle is grayed out, check you have an active SIM/data plan with your cellular carrier.",
+            fallback = "If cellular data is disabled, ensure you have an active SIM card and data balance from your carrier.",
             isCompleted = isCellularActive,
             isActive = activeStep == 1
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        isCheckingData = true
-                        scope.launch {
-                            delay(1000)
-                            val hasCellular = checkCellularData()
-                            // For demo in Emulator/Cloud we can mock success if local checks are not possible
-                            isCellularActive = true
-                            isCheckingData = false
-                            activeStep = 2
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth()
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Panel.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, BorderLine),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                 ) {
-                    Text(if (isCheckingData) "Scanning for Cellular signal..." else "Check Mobile Data Signal", fontWeight = FontWeight.Bold)
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = "🔴 No active cellular data connection detected.",
+                            color = Color(0xFFEF5350),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Turn on Mobile Data in your phone settings, then this screen will update automatically. We check for real signal every 2 seconds.",
+                            color = PaperDim,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
                 }
 
                 Button(
                     onClick = {
-                        // Redirect to Cellular Data / Tethering Settings
-                        val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
-                        context.startActivity(intent)
+                        val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: Exception) {}
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
-                    border = BorderStroke(1.dp, BorderLine),
-                    modifier = Modifier.fillMaxWidth()
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
-                    Text("Open Mobile Data Settings ⚙")
+                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open Mobile Settings ⚙", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -3009,7 +3175,7 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         // ─────────────────────────────────────────────────────────────────────
         // STEP 2: SET HOTSPOT SSID & PASSWORD
         // ─────────────────────────────────────────────────────────────────────
-        WizardStepItem(
+        HotspotStepItem(
             stepNumber = 2,
             title = "Set Hotspot Name & Credentials",
             difficulty = "Easy",
@@ -3052,7 +3218,7 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
                         activeStep = 3
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
                     Text("Confirm Credentials & Lock In", fontWeight = FontWeight.Bold)
                 }
@@ -3062,7 +3228,7 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         // ─────────────────────────────────────────────────────────────────────
         // STEP 3: TURN HOTSPOT ON
         // ─────────────────────────────────────────────────────────────────────
-        WizardStepItem(
+        HotspotStepItem(
             stepNumber = 3,
             title = "Toggle Portable Hotspot ON",
             difficulty = "Easy",
@@ -3075,7 +3241,7 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Please click the button below to navigate to your settings, and toggle 'Portable Hotspot' ON. Set SSID to \"$ssidName\" and Security to OPEN or use password.",
+                    "Please navigate to your device settings using the button below, and toggle 'Portable Hotspot' (or 'WiFi Tethering') to ON.\n\nEnsure you set the SSID name to \"$ssidName\" and security matches what you specified.",
                     color = PaperDim,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -3099,23 +3265,32 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
+                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text("Open Hotspot System Settings ⚙", fontWeight = FontWeight.Bold)
                 }
 
-                Button(
-                    onClick = {
-                        // Reflection check or manual confirmation fallback
-                        val active = isNativeHotspotEnabled()
-                        hotspotTurnedOn = true // Allow bypass/continue
-                        activeStep = 4
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Panel.copy(alpha = 0.5f),
                     border = BorderStroke(1.dp, BorderLine),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 ) {
-                    Text("I've Switched it ON ✅")
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(color = Amber, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "Waiting for hotspot broadcast signal... (We poll live every 2 seconds. No need to click anything once enabled!)",
+                            color = PaperDim,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
                 }
             }
         }
@@ -3123,7 +3298,7 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         // ─────────────────────────────────────────────────────────────────────
         // STEP 4: CONFIRM GUEST CONNECTION
         // ─────────────────────────────────────────────────────────────────────
-        WizardStepItem(
+        HotspotStepItem(
             stepNumber = 4,
             title = "Active Guest Device Handshake",
             difficulty = "Moderate",
@@ -3139,9 +3314,6 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp))
-                Text("Waiting for a device to connect...", color = PaperDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = Panel,
@@ -3160,12 +3332,56 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
                     }
                 }
 
+                if (connectedClientsList.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Panel.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, BorderLine),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(color = Cyan, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "Waiting for a device to connect...\nJoin \"$ssidName\" on another phone to continue.",
+                                color = PaperDim,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF2E7D32).copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, Color(0xFF2E7D32).copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Real device connected successfully!", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text("Detected MAC(s):", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            connectedClientsList.forEach { mac ->
+                                Text("• $mac", color = Paper, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
+                }
+
                 Button(
                     onClick = {
                         nav.navigate(Route.VERIFY_SETUP)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth()
+                    enabled = connectedClientsList.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink, disabledContainerColor = Panel.copy(alpha = 0.5f), disabledContentColor = PaperDim.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
                     Text("Proceed to Launch Dashboard →", fontWeight = FontWeight.Bold)
                 }
