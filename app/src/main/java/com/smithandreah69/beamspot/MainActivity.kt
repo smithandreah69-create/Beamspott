@@ -1536,7 +1536,12 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
         perms = perms.toMutableList().apply { find { it.label == "Run in background" }?.granted = true }
 
         // VPN — shows Android's own VPN consent dialog
-        val vpnIntent = VpnService.prepare(context)
+        val vpnIntent = try {
+            VpnService.prepare(context)
+        } catch (e: Exception) {
+            android.util.Log.e("BeamSpot", "Failed to prepare VPN in requestAll", e)
+            null
+        }
         if (vpnIntent != null) {
             vpnPermLauncher?.launch(vpnIntent)
         } else {
@@ -1562,7 +1567,11 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
                 else true
             } catch (_: Exception) { false }
-            val vpnGranted = VpnService.prepare(context) == null
+            val vpnGranted = try {
+                VpnService.prepare(context) == null
+            } catch (e: Exception) {
+                false
+            }
 
             perms = perms.toMutableList().apply {
                 find { it.label == "Location" }?.granted = locationGranted
@@ -1588,8 +1597,12 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
                 }
             }
             "VPN" -> {
-                val vpnIntent = VpnService.prepare(context)
-                if (vpnIntent != null) vpnPermLauncher?.launch(vpnIntent)
+                try {
+                    val vpnIntent = VpnService.prepare(context)
+                    if (vpnIntent != null) vpnPermLauncher?.launch(vpnIntent)
+                } catch (e: Exception) {
+                    android.util.Log.e("BeamSpot", "Failed to prepare VPN in requestPermissionFor", e)
+                }
             }
             "Battery optimisation", "Run in background" -> {
                 val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
