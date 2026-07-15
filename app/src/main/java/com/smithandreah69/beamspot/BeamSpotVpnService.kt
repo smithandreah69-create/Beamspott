@@ -80,15 +80,23 @@ class BeamSpotVpnService : VpnService() {
 
         // Expose credentials and status to UI
         var actualHotspotSsid = ""
-            private set
+            set(value) { field = value }
         var actualHotspotPassword = ""
-            private set
+            set(value) { field = value }
         var activeLocalClientsCount = 0
-            private set
+            set(value) { field = value }
         var isStaApSupported = false
-            private set
+            set(value) { field = value }
         const val MAX_GUESTS = 30 // Safe conservative hardware connection threshold
         var activeListingId = "1"
+
+        // Throughput statistics
+        var totalBytesRx = 0L // bytes uploaded by clients (Upload)
+        var totalBytesTx = 0L // bytes downloaded by clients (Download)
+        var currentDlSpeedMbps = 0.0
+            set(value) { field = value }
+        var currentUlSpeedMbps = 0.0
+            set(value) { field = value }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -129,8 +137,35 @@ class BeamSpotVpnService : VpnService() {
 
         isRunning = true
 
+        // Reset statistics
+        totalBytesRx = 0L
+        totalBytesTx = 0L
+        currentDlSpeedMbps = 0.0
+        currentUlSpeedMbps = 0.0
+
         // Start Local Only Hotspot
         startHotspot()
+
+        // Start live throughput speed calculation coroutine
+        serviceScope.launch {
+            var lastRx = 0L
+            var lastTx = 0L
+            var lastTime = System.currentTimeMillis()
+            while (isRunning) {
+                delay(1000)
+                val now = System.currentTimeMillis()
+                val elapsed = (now - lastTime) / 1000.0
+                if (elapsed > 0) {
+                    val rxDelta = totalBytesRx - lastRx
+                    val txDelta = totalBytesTx - lastTx
+                    currentUlSpeedMbps = ((rxDelta * 8) / (elapsed * 1_000_000.0)).coerceAtLeast(0.0)
+                    currentDlSpeedMbps = ((txDelta * 8) / (elapsed * 1_000_000.0)).coerceAtLeast(0.0)
+                    lastRx = totalBytesRx
+                    lastTx = totalBytesTx
+                    lastTime = now
+                }
+            }
+        }
 
         // Start pending session backend polling loop for Smart Bridge phone mode
         startSessionPolling()
@@ -187,6 +222,103 @@ class BeamSpotVpnService : VpnService() {
         }
     }
 
+    private fun configureSoftApSsidAndPassword() {
+        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+        val desiredSsid = prefs.getString("beam_spot_network_name", "home") ?: "home"
+        val desiredPassword = prefs.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
+
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
+                val builder = builderClass.getDeclaredConstructor().newInstance()
+                
+                val setSsidMethod = builderClass.getMethod("setSsid", String::class.java)
+                setSsidMethod.invoke(builder, desiredSsid)
+                
+                if (desiredPassword.length >= 8) {
+                    val setPassphraseMethod = builderClass.getMethod("setPassphrase", String::class.java, Int::class.javaPrimitiveType)
+                    setPassphraseMethod.invoke(builder, desiredPassword, 4) // 4 is SECURITY_TYPE_WPA2_PSK
+                }
+                
+                val buildMethod = builderClass.getMethod("build")
+                val softApConfig = buildMethod.invoke(builder)
+                
+                val setSoftApConfigurationMethod = wifiManager.javaClass.getMethod("setSoftApConfiguration", Class.forName("android.net.wifi.SoftApConfiguration"))
+                val success = setSoftApConfigurationMethod.invoke(wifiManager, softApConfig) as? Boolean ?: false
+                android.util.Log.i("BeamSpotVpnService", "Programmatically set SoftApConfiguration SSID to $desiredSsid, success: $success")
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Failed to set SoftApConfiguration programmatically", e)
+            }
+        } else {
+            try {
+                val configClass = Class.forName("android.net.wifi.WifiConfiguration")
+                val config = configClass.getDeclaredConstructor().newInstance()
+                
+                val ssidField = configClass.getField("SSID")
+                ssidField.set(config, desiredSsid)
+                
+                if (desiredPassword.length >= 8) {
+                    val preSharedKeyField = configClass.getField("preSharedKey")
+                    preSharedKeyField.set(config, desiredPassword)
+                }
+                
+                val setWifiApConfigurationMethod = wifiManager.javaClass.getMethod("setWifiApConfiguration", configClass)
+                val success = setWifiApConfigurationMethod.invoke(wifiManager, config) as? Boolean ?: false
+                android.util.Log.i("BeamSpotVpnService", "Programmatically set WifiApConfiguration SSID to $desiredSsid, success: $success")
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Failed to set WifiApConfiguration programmatically", e)
+            }
+        }
+    }
+
+    @Suppress("MissingPermission")
+    private fun startLocalOnlyHotspotFallback() {
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        isStaApSupported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            wifiManager.isStaApConcurrencySupported
+        } else {
+            false
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
+                        override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
+                            super.onStarted(reservation)
+                            hotspotReservation = reservation
+                            val config = reservation.wifiConfiguration
+                            actualHotspotSsid = config?.SSID ?: ""
+                            actualHotspotPassword = config?.preSharedKey ?: ""
+                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot started fallback. SSID: $actualHotspotSsid, password: $actualHotspotPassword")
+                        }
+
+                        override fun onStopped() {
+                            super.onStopped()
+                            hotspotReservation = null
+                            actualHotspotSsid = ""
+                            actualHotspotPassword = ""
+                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot fallback stopped")
+                        }
+
+                        override fun onFailed(reason: Int) {
+                            super.onFailed(reason)
+                            hotspotReservation = null
+                            actualHotspotSsid = ""
+                            actualHotspotPassword = ""
+                            android.util.Log.e("BeamSpotVpnService", "LocalOnlyHotspot fallback failed with reason code: $reason")
+                        }
+                    }, Handler(Looper.getMainLooper()))
+                } else {
+                    android.util.Log.w("BeamSpotVpnService", "Cannot start LocalOnlyHotspot fallback: ACCESS_FINE_LOCATION not granted.")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpotVpnService", "Exception starting LocalOnlyHotspot fallback", e)
+            }
+        }
+    }
+
     @android.annotation.SuppressLint("MissingPermission")
     private fun startHotspot() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -207,6 +339,9 @@ class BeamSpotVpnService : VpnService() {
                 return
             }
         }
+
+        // Configure SSID and Password first so that portable hotspots and reflection use the custom SSID!
+        configureSoftApSsidAndPassword()
 
         val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
         val hasSetup = prefs.getBoolean("has_done_hotspot_setup", false)
@@ -256,11 +391,13 @@ class BeamSpotVpnService : VpnService() {
                             override fun invoke(proxy: Any?, method: java.lang.reflect.Method?, args: Array<out Any>?): Any? {
                                 if (method?.name == "onTetheringStarted") {
                                     android.util.Log.i("BeamSpotVpnService", "Tethering started successfully!")
-                                    actualHotspotSsid = "BeamSpot Hotspot"
-                                    actualHotspotPassword = "Check phone hotspot settings"
+                                    val prefsObj = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                                    actualHotspotSsid = prefsObj.getString("beam_spot_network_name", "BeamSpot Hotspot") ?: "BeamSpot Hotspot"
+                                    actualHotspotPassword = prefsObj.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
                                 } else if (method?.name == "onTetheringFailed") {
                                     val error = args?.get(0) as? Int ?: -1
-                                    android.util.Log.e("BeamSpotVpnService", "Tethering failed with error code: $error")
+                                    android.util.Log.e("BeamSpotVpnService", "Tethering failed with error code: $error. Falling back to LocalOnlyHotspot.")
+                                    startLocalOnlyHotspotFallback()
                                 }
                                 return null
                             }
@@ -275,6 +412,8 @@ class BeamSpotVpnService : VpnService() {
                 }
             } catch (e: Exception) {
                 android.util.Log.e("BeamSpotVpnService", "Error starting tethering on Android 11+, trying LocalOnlyHotspot fallback", e)
+                startLocalOnlyHotspotFallback()
+                return
             }
         }
 
@@ -290,8 +429,9 @@ class BeamSpotVpnService : VpnService() {
                         Boolean::class.javaPrimitiveType
                     )
                     setWifiApEnabledMethod.invoke(wifiManager, null, true)
-                    actualHotspotSsid = "BeamSpot Hotspot"
-                    actualHotspotPassword = "Check phone hotspot settings"
+                    val prefsObj = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                    actualHotspotSsid = prefsObj.getString("beam_spot_network_name", "BeamSpot Hotspot") ?: "BeamSpot Hotspot"
+                    actualHotspotPassword = prefsObj.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
                     android.util.Log.i("BeamSpotVpnService", "Legacy tethering enabled via WifiManager.")
                     return
                 }
@@ -300,52 +440,8 @@ class BeamSpotVpnService : VpnService() {
             }
         }
 
-        // Standard LocalOnlyHotspot fallback if reflection methods fail or for older devices (API 26+)
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        isStaApSupported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            wifiManager.isStaApConcurrencySupported
-        } else {
-            false
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
-                        override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
-                            super.onStarted(reservation)
-                            hotspotReservation = reservation
-                            val config = reservation.wifiConfiguration
-                            actualHotspotSsid = config?.SSID ?: ""
-                            actualHotspotPassword = config?.preSharedKey ?: ""
-                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot started. SSID: $actualHotspotSsid, password: $actualHotspotPassword")
-                        }
-
-                        override fun onStopped() {
-                            super.onStopped()
-                            hotspotReservation = null
-                            actualHotspotSsid = ""
-                            actualHotspotPassword = ""
-                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot stopped")
-                        }
-
-                        override fun onFailed(reason: Int) {
-                            super.onFailed(reason)
-                            hotspotReservation = null
-                            actualHotspotSsid = ""
-                            actualHotspotPassword = ""
-                            android.util.Log.e("BeamSpotVpnService", "LocalOnlyHotspot failed to start with reason code: $reason")
-                        }
-                    }, Handler(Looper.getMainLooper()))
-                } else {
-                    android.util.Log.w("BeamSpotVpnService", "Cannot start LocalOnlyHotspot: ACCESS_FINE_LOCATION permission not granted.")
-                }
-            } catch (e: SecurityException) {
-                android.util.Log.e("BeamSpotVpnService", "SecurityException starting LocalOnlyHotspot", e)
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "General Exception starting LocalOnlyHotspot", e)
-            }
-        }
+        // Default: Start LocalOnlyHotspot fallback
+        startLocalOnlyHotspotFallback()
     }
 
     private fun stopHotspot() {
@@ -419,6 +515,7 @@ class BeamSpotVpnService : VpnService() {
                 delay(10); continue
             }
             buffer.flip()
+            totalBytesRx += len
 
             // Parse source IP and destination IP from the IPv4 header (bytes 12–19)
             if (buffer.limit() >= 20 && (buffer.get(0).toInt() and 0xF0) == 0x40) {
@@ -466,7 +563,10 @@ class BeamSpotVpnService : VpnService() {
     }
 
     private fun forwardPacketDirect(buffer: ByteBuffer, out: FileOutputStream) {
-        try { out.write(buffer.array(), 0, buffer.limit()) } catch (_: Exception) {}
+        try { 
+            out.write(buffer.array(), 0, buffer.limit()) 
+            totalBytesTx += buffer.limit()
+        } catch (_: Exception) {}
     }
 
     private fun forwardPacketRelayed(
@@ -1011,6 +1111,7 @@ class UdpSession(
         try {
             outStream.write(packet)
             outStream.flush()
+            BeamSpotVpnService.totalBytesTx += packet.size
         } catch (_: Exception) {}
     }
 }
@@ -1099,6 +1200,7 @@ fun sendTcpPacket(
     try {
         outStream.write(packet)
         outStream.flush()
+        BeamSpotVpnService.totalBytesTx += packet.size
     } catch (_: Exception) {}
 }
 
