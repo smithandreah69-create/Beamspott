@@ -82,6 +82,9 @@ private object Route {
     const val SB_PASSWORD      = "sb_password/{ssid}/{bssid}" // enter password
     const val SB_PERMISSIONS   = "sb_permissions"    // request real permissions
     const val SB_NAMING        = "sb_naming"         // name the BeamSpot network
+    const val ROUTER_SETUP     = "router_setup"
+    const val HOTSPOT_SETUP    = "hotspot_setup"
+    const val VERIFY_SETUP     = "verify_setup"
     const val DASHBOARD        = "dashboard"
     const val GUEST_PORTAL     = "guest_portal"      // Guest Flow: find and connect
     const val MAIN_APP         = "main_app"          // Bottom-nav wrapper
@@ -148,6 +151,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     var selectedWifi by mutableStateOf<WifiNetwork?>(null)
+
+    private val _routerGuestSsid = mutableStateOf(prefs.getString("router_guest_ssid", "") ?: "")
+    var routerGuestSsid: String
+        get() = _routerGuestSsid.value
+        set(value) {
+            _routerGuestSsid.value = value
+            prefs.edit().putString("router_guest_ssid", value).apply()
+        }
+
+    private val _routerGuestPassword = mutableStateOf(prefs.getString("router_guest_password", "") ?: "")
+    var routerGuestPassword: String
+        get() = _routerGuestPassword.value
+        set(value) {
+            _routerGuestPassword.value = value
+            prefs.edit().putString("router_guest_password", value).apply()
+        }
 
     private val _beamSpotNetworkName = mutableStateOf(prefs.getString("beam_spot_network_name", "") ?: "")
     var beamSpotNetworkName: String
@@ -460,6 +479,9 @@ fun BeamSpotApp() {
         }
         composable(Route.SB_PERMISSIONS) { SmartBridgePermissionsScreen(nav, vm) }
         composable(Route.SB_NAMING)      { SmartBridgeNamingScreen(nav, vm) }
+        composable(Route.ROUTER_SETUP)   { RouterSetupScreen(nav, vm) }
+        composable(Route.HOTSPOT_SETUP)  { HotspotSetupScreen(nav, vm) }
+        composable(Route.VERIFY_SETUP)   { VerifySetupScreen(nav, vm) }
         composable(Route.MAIN_APP)       { MainAppScreen(nav, vm) }
     }
 }
@@ -1230,19 +1252,56 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
 fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
-    // Item 39: Only Smart Bridge is functional — use plain language for the user-facing label
+    val context = LocalContext.current
+    val wifiManager = remember { context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager }
+    val isStaApSupported = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            wifiManager?.isStaApConcurrencySupported == true
+        } else {
+            false
+        }
+    }
+
     val activeModes = listOf(
         Triple("smart_bridge", "Share your home WiFi", "We'll turn your home internet into a paid hotspot other people nearby can join. Guests pay by the minute."),
-        Triple("router",       "Router Mode",  "Best — install a script on your OpenWRT router. Full automatic control."),
-        Triple("hotspot",      "Phone Hotspot","Basic — share your mobile data directly. Guests connect manually.")
+        Triple("router",       "Router Mode",  "Best — guide you to configure a Guest Network on your home router. Full automatic control."),
+        Triple("hotspot",      "Phone Hotspot","Basic — share your mobile data directly via native portable hotspot.")
     )
-    // Item 39: Only Smart Bridge is selectable; other modes shown as inactive/future
+
     val modes = activeModes.map { (id, title, desc) ->
-        val isActive = id == "smart_bridge"
-        Triple(id, title, if (isActive) desc else "$desc (Coming soon)")
+        val enabled = if (id == "smart_bridge") isStaApSupported else true
+        val finalDesc = if (id == "smart_bridge" && !isStaApSupported) {
+            "$desc\n\n⚠️ Your phone's hardware doesn't support sharing Wi-Fi while connected to Wi-Fi. (Requires dual-band Wi-Fi capability). Please use Phone Hotspot instead."
+        } else desc
+        val badge = when (id) {
+            "smart_bridge" -> if (isStaApSupported) "RECOMMENDED" else "UNSUPPORTED"
+            "router" -> "HIGH SPEED"
+            else -> "EASY SETUP"
+        }
+        val badgeColor = when (id) {
+            "smart_bridge" -> if (isStaApSupported) Cyan else Color(0xFFEF5350)
+            "router" -> Amber
+            else -> Color(0xFF42A5F5)
+        }
+        val selected = vm.selectedMode == id && enabled
+        
+        object {
+            val id = id
+            val title = title
+            val desc = finalDesc
+            val enabled = enabled
+            val badge = badge
+            val badgeColor = badgeColor
+            val selected = selected
+        }
     }
-    val badges = mapOf("smart_bridge" to "RECOMMENDED", "router" to "COMING SOON", "hotspot" to "COMING SOON")
-    val badgeColors = mapOf("smart_bridge" to Cyan, "router" to PaperDim, "hotspot" to PaperDim)
+
+    // Default select supported mode
+    LaunchedEffect(isStaApSupported) {
+        if (vm.selectedMode.isEmpty() || (vm.selectedMode == "smart_bridge" && !isStaApSupported)) {
+            vm.selectedMode = if (isStaApSupported) "smart_bridge" else "hotspot"
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().background(Ink)
@@ -1258,21 +1317,22 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
         }
 
         Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            modes.forEach { (id, title, desc) ->
+            modes.forEach { mode ->
                 ModeCard(
-                    id = id, title = title, description = desc,
-                    badge = badges[id] ?: "",
-                    badgeColor = badgeColors[id] ?: PaperDim,
-                    selected = vm.selectedMode == id,
-                    onSelect = { vm.selectedMode = id }
+                    id = mode.id, title = mode.title, description = mode.desc,
+                    badge = mode.badge,
+                    badgeColor = mode.badgeColor,
+                    selected = mode.selected,
+                    enabled = mode.enabled,
+                    onSelect = { vm.selectedMode = mode.id }
                 )
             }
             Spacer(Modifier.height(24.dp))
-            BeamButton("Configure Setup →", Cyan) {
+            BeamButton("Configure Setup →", Cyan, enabled = vm.selectedMode.isNotEmpty() && (vm.selectedMode != "smart_bridge" || isStaApSupported)) {
                 when (vm.selectedMode) {
                     "smart_bridge" -> nav.navigate(Route.SB_WIFI_SCAN)
-                    "router"       -> nav.navigate(Route.SB_NAMING)
-                    "hotspot"      -> nav.navigate(Route.SB_PERMISSIONS)
+                    "router"       -> nav.navigate(Route.ROUTER_SETUP)
+                    "hotspot"      -> nav.navigate(Route.HOTSPOT_SETUP)
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -1281,18 +1341,20 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
 }
 
 @Composable
-private fun ModeCard(id: String, title: String, description: String, badge: String, badgeColor: Color, selected: Boolean, onSelect: () -> Unit) {
+private fun ModeCard(id: String, title: String, description: String, badge: String, badgeColor: Color, selected: Boolean, enabled: Boolean = true, onSelect: () -> Unit) {
+    val alpha = if (enabled) 1f else 0.45f
     Surface(
-        onClick = onSelect,
+        onClick = { if (enabled) onSelect() },
         shape = RoundedCornerShape(18.dp),
         color = Panel,
-        border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine),
-        modifier = Modifier.fillMaxWidth()
+        border = BorderStroke(1.5.dp, if (selected && enabled) Cyan else BorderLine),
+        modifier = Modifier.fillMaxWidth().alpha(alpha)
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
                 RadioButton(
-                    selected = selected, onClick = onSelect,
+                    selected = selected, onClick = { if (enabled) onSelect() },
+                    enabled = enabled,
                     colors = RadioButtonDefaults.colors(selectedColor = Cyan, unselectedColor = PaperDim)
                 )
                 Surface(shape = RoundedCornerShape(6.dp), color = badgeColor.copy(0.12f)) {
@@ -1301,9 +1363,9 @@ private fun ModeCard(id: String, title: String, description: String, badge: Stri
                 }
             }
             Spacer(Modifier.height(4.dp))
-            Text(title, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = if (enabled) Paper else PaperDim, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
-            Text(description, color = PaperDim, fontSize = 12.sp, lineHeight = 17.sp)
+            Text(description, color = if (enabled) PaperDim else PaperDim.copy(alpha = 0.6f), fontSize = 12.sp, lineHeight = 17.sp)
         }
     }
 }
@@ -1748,9 +1810,6 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
 fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
     val defaultName = "${vm.userName.take(12)}_BeamSpot".replace(" ", "_")
     var name by remember { mutableStateOf(defaultName) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var isActivating by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
         Spacer(Modifier.height(40.dp))
@@ -1763,22 +1822,488 @@ fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
         Spacer(Modifier.height(8.dp))
         Text("Guests will see: \"$name\"", color = Cyan, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
         Spacer(Modifier.weight(1f))
-        BeamButton(if (isActivating) "Starting…" else "Start earning →", Cyan, enabled = name.isNotBlank() && !isActivating) {
+        BeamButton("Continue to Verification →", Cyan, enabled = name.isNotBlank()) {
             vm.beamSpotNetworkName = name
-            isActivating = true
-            scope.launch {
-                // Start the VPN service (real Android service start)
-                val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
-                    action = BeamSpotVpnService.ACTION_START
-                    putExtra("EXTRA_LISTING_ID", vm.activeListingId)
+            nav.navigate(Route.VERIFY_SETUP)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ROUTER SETUP: STEP-BY-STEP WIZARD
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    var guestSsid by remember { mutableStateOf(vm.routerGuestSsid.ifEmpty { "BeamSpot_Guest_WiFi" }) }
+    var guestPass by remember { mutableStateOf(vm.routerGuestPassword.ifEmpty { "beamspot123" }) }
+    var pricePerMin by remember { mutableStateOf(vm.pricePerMin.toString()) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
+        Spacer(Modifier.height(40.dp))
+        StepBadge("Router Mode Config")
+        Spacer(Modifier.height(12.dp))
+        Text("Setup Your Router Guest WiFi", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Follow these simple steps to turn your home router into a cash-generating BeamSpot.",
+            color = PaperDim,
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        // Step-by-step Card Guide
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Panel,
+            border = BorderStroke(1.dp, BorderLine),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("How to configure your router:", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("1. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Look at the sticker on the back or bottom of your physical home router to find your Router IP (usually 192.168.1.1 or 192.168.0.1) and Admin Password.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
                 }
-                context.startService(vpnIntent)
-                delay(1200)
-                vm.vpnActive = true
-                isActivating = false
-                nav.navigate(Route.MAIN_APP) { popUpTo(Route.LANDING) { inclusive = false } }
+                
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("2. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Connect your phone to your router's WiFi, open a web browser, type that Router IP address in the address bar, and press enter.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("3. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Log in with the admin credentials, find the \"Guest Network\" settings screen, and click Enable.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("4. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Name the Guest Network (SSID) and set a secure password. Then type those details exactly in the fields below.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
             }
         }
+
+        Spacer(Modifier.height(24.dp))
+
+        BeamLabel("Step 1: Enter your Guest WiFi Name (SSID)")
+        BeamInput(value = guestSsid, onValueChange = { guestSsid = it }, placeholder = "e.g. MyHome_Guest")
+        Spacer(Modifier.height(10.dp))
+
+        BeamLabel("Step 2: Enter Guest WiFi Password")
+        BeamInput(value = guestPass, onValueChange = { guestPass = it }, placeholder = "e.g. password123")
+        Spacer(Modifier.height(10.dp))
+
+        BeamLabel("Step 3: Price per Minute (KES)")
+        BeamInput(value = pricePerMin, onValueChange = { pricePerMin = it }, placeholder = "2.0", keyboardType = KeyboardType.Number)
+
+        Spacer(Modifier.height(30.dp))
+
+        BeamButton("Save & Search for Guest WiFi →", Cyan, enabled = guestSsid.isNotBlank() && guestPass.isNotBlank()) {
+            vm.routerGuestSsid = guestSsid
+            vm.routerGuestPassword = guestPass
+            vm.beamSpotNetworkName = guestSsid
+            val parsedPrice = pricePerMin.toDoubleOrNull() ?: 2.0
+            vm.pricePerMin = parsedPrice
+            nav.navigate(Route.VERIFY_SETUP)
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// HOTSPOT SETUP: CLASSIC PHONE HOTSPOT INSTRUCTIONS
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    val defaultName = "${vm.userName.take(12)}_BeamSpot".replace(" ", "_")
+    var name by remember { mutableStateOf(vm.beamSpotNetworkName.ifEmpty { defaultName }) }
+    var pricePerMin by remember { mutableStateOf(vm.pricePerMin.toString()) }
+    val context = LocalContext.current
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
+        Spacer(Modifier.height(40.dp))
+        StepBadge("Phone Hotspot Setup")
+        Spacer(Modifier.height(12.dp))
+        Text("Share your Mobile Data", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "We'll guide you to configure your phone's native hotspot so guests can connect and pay you.",
+            color = PaperDim,
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Panel,
+            border = BorderStroke(1.dp, BorderLine),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("How to configure your phone hotspot:", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("1. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Input your preferred hotspot name below (we suggest matching-naming it for consistency) and set your desired price.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("2. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("We'll guide you to your phone's native Hotspot settings. In those settings, set your hotspot name exactly to: \"$name\" and set its Security to OPEN (No Password) or a password you share. (Open is recommended so guests can connect and be auto-redirected to pay).", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+
+                Row(verticalAlignment = Alignment.Top) {
+                    Text("3. ", color = Amber, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Turn your Portable Hotspot toggle ON.", color = Paper, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        BeamLabel("BeamSpot Hotspot Name")
+        BeamInput(value = name, onValueChange = { if (it.length <= 32) name = it }, placeholder = "e.g. Mama_Jane_BeamSpot")
+        Spacer(Modifier.height(10.dp))
+
+        BeamLabel("Price per Minute (KES)")
+        BeamInput(value = pricePerMin, onValueChange = { pricePerMin = it }, placeholder = "2.0", keyboardType = KeyboardType.Number)
+
+        Spacer(Modifier.height(30.dp))
+
+        BeamButton("Save & Start Verification →", Cyan, enabled = name.isNotBlank()) {
+            vm.beamSpotNetworkName = name
+            val parsedPrice = pricePerMin.toDoubleOrNull() ?: 2.0
+            vm.pricePerMin = parsedPrice
+            nav.navigate(Route.VERIFY_SETUP)
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STATE VERIFICATION SCREEN FOR ALL MODES
+// ─────────────────────────────────────────────────────────────────────────
+@Composable
+fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val sessionManager = remember { SessionManager(context) }
+    val wifiScanHelper = remember { WifiScanHelper(context) }
+
+    var isVerifying by remember { mutableStateOf(true) }
+    var verifySuccess by remember { mutableStateOf(false) }
+    var verifyError by remember { mutableStateOf("") }
+    var logMessage by remember { mutableStateOf("Initializing verification engine...") }
+    var showSettingTip by remember { mutableStateOf(false) }
+
+    // Helper to check if native hotspot is active via reflection/network interfaces
+    fun isNativeHotspotEnabled(): Boolean {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
+        return try {
+            val method = wifiManager.javaClass.getMethod("isWifiApEnabled")
+            method.invoke(wifiManager) as Boolean
+        } catch (e: Exception) {
+            // Fallback: search system network interfaces
+            try {
+                val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+                var active = false
+                while (interfaces.hasMoreElements()) {
+                    val iface = interfaces.nextElement()
+                    if (iface.isUp && (iface.name.contains("ap") || iface.name.contains("softap") || iface.name.contains("wigig") || iface.name.contains("p2p"))) {
+                        active = true
+                        break
+                    }
+                }
+                active
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    fun startVerification() {
+        isVerifying = true
+        verifySuccess = false
+        verifyError = ""
+        showSettingTip = false
+
+        scope.launch {
+            when (vm.selectedMode) {
+                "smart_bridge" -> {
+                    logMessage = "Starting local Smart Bridge hotspot server..."
+                    // Launch service
+                    val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                        action = BeamSpotVpnService.ACTION_START
+                        putExtra("EXTRA_LISTING_ID", vm.activeListingId)
+                    }
+                    try {
+                        context.startService(vpnIntent)
+                    } catch (e: Exception) {
+                        verifyError = "Failed to start background VPN service: ${e.message}"
+                        isVerifying = false
+                        return@launch
+                    }
+
+                    // Poll for up to 15 seconds
+                    var attempts = 0
+                    while (attempts < 15) {
+                        delay(1000)
+                        attempts++
+                        logMessage = "Broadcasting BeamSpot Smart Bridge network (attempt $attempts/15)..."
+                        
+                        val isRunning = BeamSpotVpnService.isRunning
+                        val ssid = BeamSpotVpnService.actualHotspotSsid
+                        
+                        if (isRunning && ssid.isNotEmpty()) {
+                            verifySuccess = true
+                            isVerifying = false
+                            vm.vpnActive = true
+                            return@launch
+                        }
+                    }
+
+                    // Timeout
+                    verifyError = "Smart Bridge start timeout. In some Android versions, LocalOnlyHotspot cannot start if classic hotspot is currently active, or if Wi-Fi is occupied by another system action."
+                    showSettingTip = true
+                    isVerifying = false
+                }
+
+                "router" -> {
+                    logMessage = "Scanning for your Guest WiFi network '${vm.routerGuestSsid}' nearby..."
+                    
+                    var attempts = 0
+                    while (attempts < 6) {
+                        attempts++
+                        logMessage = "Scanning nearby WiFi networks (attempt $attempts/6)..."
+                        
+                        val networks = wifiScanHelper.scanNetworks()
+                        val found = networks.any { it.ssid.equals(vm.routerGuestSsid, ignoreCase = true) }
+                        
+                        if (found) {
+                            verifySuccess = true
+                            isVerifying = false
+                            return@launch
+                        }
+                        delay(3000)
+                    }
+
+                    // Timeout
+                    verifyError = "We could not detect any WiFi network named '${vm.routerGuestSsid}' broadcasting nearby."
+                    isVerifying = false
+                }
+
+                "hotspot" -> {
+                    logMessage = "Detecting active Phone Hotspot..."
+                    showSettingTip = true
+                    
+                    var attempts = 0
+                    while (attempts < 15) {
+                        delay(1500)
+                        attempts++
+                        
+                        val active = isNativeHotspotEnabled()
+                        logMessage = "Monitoring phone tethering interfaces (attempt $attempts/15)..."
+                        
+                        if (active) {
+                            verifySuccess = true
+                            isVerifying = false
+                            return@launch
+                        }
+                    }
+
+                    // Timeout
+                    verifyError = "Could not detect active native hotspot. Please ensure Hotspot/Tethering is turned ON in your system settings."
+                    isVerifying = false
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        startVerification()
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(40.dp))
+        StepBadge("Broadcasting Verification")
+        Spacer(Modifier.height(20.dp))
+        
+        Text(
+            text = when {
+                verifySuccess -> "Setup Verified Successfully! 🎉"
+                isVerifying -> "Verifying Broadcasting State"
+                else -> "Verification Failed"
+            },
+            color = if (verifySuccess) Cyan else if (isVerifying) Paper else Color(0xFFEF5350),
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        
+        Spacer(Modifier.height(10.dp))
+        
+        Text(
+            text = if (verifySuccess) "Your network is confirmed active and broadcasting properly. Guests can now connect and pay you." 
+                   else "We check the real hardware state to ensure guests can actually connect before you launch.",
+            color = PaperDim,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp
+        )
+
+        Spacer(Modifier.weight(0.8f))
+
+        // Visual State Card
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Panel,
+            border = BorderStroke(2.dp, if (verifySuccess) Cyan else if (isVerifying) BorderLine else Color(0xFFEF5350).copy(0.4f)),
+            modifier = Modifier.fillMaxWidth().height(220.dp)
+        ) {
+            Column(
+                Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (isVerifying) {
+                    CircularProgressIndicator(color = Cyan, strokeWidth = 3.dp, modifier = Modifier.size(44.dp))
+                    Spacer(Modifier.height(20.dp))
+                    Text(logMessage, color = Paper, fontSize = 12.sp, textAlign = TextAlign.Center, fontFamily = FontFamily.Monospace, lineHeight = 16.sp)
+                } else if (verifySuccess) {
+                    Icon(Icons.Filled.CheckCircle, null, tint = Cyan, modifier = Modifier.size(54.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("ACTIVE & BROADCASTING", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Network Name: \"${vm.beamSpotNetworkName}\"", color = Paper, fontSize = 13.sp)
+                } else {
+                    Icon(Icons.Filled.Error, null, tint = Color(0xFFEF5350), modifier = Modifier.size(54.dp))
+                    Spacer(Modifier.height(14.dp))
+                    Text(verifyError, color = Paper, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 15.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        if (showSettingTip && !verifySuccess) {
+            Button(
+                onClick = {
+                    val intent = Intent().apply {
+                        action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    try {
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        try {
+                            val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(fallbackIntent)
+                        } catch (_: Exception) {}
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Amber.copy(0.12f), contentColor = Amber),
+                border = BorderStroke(1.dp, Amber.copy(0.3f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Icon(Icons.Filled.Settings, null, tint = Amber, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Open Hotspot & Tethering Settings", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (verifySuccess) {
+            BeamButton("Launch Active Dashboard →", Cyan) {
+                scope.launch {
+                    sessionManager.setCompletedSetup(true)
+                    sessionManager.saveJwtToken(RetrofitClient.getToken())
+                    sessionManager.saveUserProfile(vm.userName, vm.userEmail, vm.isDemoMode)
+                    sessionManager.saveHostSetup(
+                        listingId = vm.activeListingId,
+                        selectedMode = vm.selectedMode,
+                        networkName = vm.beamSpotNetworkName,
+                        pricePerMin = vm.pricePerMin
+                    )
+                    nav.navigate(Route.MAIN_APP) {
+                        popUpTo(Route.LANDING) { inclusive = false }
+                    }
+                }
+            }
+        } else if (!isVerifying) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        // Safe bypass / skip option for testing or unsupported ROMs
+                        scope.launch {
+                            sessionManager.setCompletedSetup(true)
+                            sessionManager.saveJwtToken(RetrofitClient.getToken())
+                            sessionManager.saveUserProfile(vm.userName, vm.userEmail, vm.isDemoMode)
+                            sessionManager.saveHostSetup(
+                                listingId = vm.activeListingId,
+                                selectedMode = vm.selectedMode,
+                                networkName = vm.beamSpotNetworkName,
+                                pricePerMin = vm.pricePerMin
+                            )
+                            nav.navigate(Route.MAIN_APP) {
+                                popUpTo(Route.LANDING) { inclusive = false }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = PaperDim),
+                    border = BorderStroke(1.dp, BorderLine)
+                ) {
+                    Text("Skip verification", fontSize = 12.sp)
+                }
+                
+                Button(
+                    onClick = { startVerification() },
+                    modifier = Modifier.weight(1.2f).height(50.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)
+                ) {
+                    Text("Retry Verification", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        } else {
+            // Muted placeholder button when verifying
+            Button(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Cyan.copy(0.3f))
+            ) {
+                Text("Verifying Broadcasting State...", color = Ink.copy(0.5f), fontSize = 13.sp)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
     }
 }
 
