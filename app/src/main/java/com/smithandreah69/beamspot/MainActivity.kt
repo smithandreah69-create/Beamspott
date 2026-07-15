@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.max
 import androidx.core.content.ContextCompat
 import android.content.Context
 import android.app.Application
@@ -56,7 +58,9 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.math.roundToInt
 
 // ─── Brand colours ────────────────────────────────────────────────────────
@@ -81,6 +85,15 @@ private object Route {
     const val SB_NAMING        = "sb_naming"         // name the BeamSpot network
     const val DASHBOARD        = "dashboard"
     const val GUEST_PORTAL     = "guest_portal"      // Guest Flow: find and connect
+    const val MAIN_APP         = "main_app"          // Bottom-nav wrapper
+}
+
+// ─── Bottom navigation items ──────────────────────────────────────────────
+private enum class BottomTab(val route: String, val label: String, val icon: ImageVector) {
+    DASHBOARD("tab_dashboard", "Dashboard", Icons.Filled.SpaceDashboard),
+    FIND_INTERNET("tab_find_internet", "Find Internet", Icons.Filled.Wifi),
+    EARNINGS("tab_earnings", "Earnings", Icons.Filled.AccountBalanceWallet),
+    SETTINGS("tab_settings", "Settings", Icons.Filled.Settings)
 }
 
 // ─── Shared ViewModel ─────────────────────────────────────────────────────
@@ -205,11 +218,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var distanceMeters     by mutableStateOf(0.0)
     var connectedSsid      by mutableStateOf("")
 
+    // Earnings history (simulated for now)
+    var earningsHistory by mutableStateOf<List<EarningsRecord>>(emptyList())
+
     init {
         val savedToken = prefs.getString("jwt_token", null)
         if (savedToken != null) {
             RetrofitClient.setToken(savedToken)
         }
+        loadEarningsHistory()
     }
 
     fun saveToken(token: String?) {
@@ -259,7 +276,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    private fun loadEarningsHistory() {
+        // Load from prefs or generate sample data
+        val json = prefs.getString("earnings_history", null)
+        if (json != null) {
+            try {
+                val items = json.split("|").map { it.split(",") }
+                earningsHistory = items.map { (date, amount, guests, status) ->
+                    EarningsRecord(date, amount.toDouble(), guests.toInt(), status)
+                }
+            } catch (_: Exception) {
+                earningsHistory = emptyList()
+            }
+        }
+    }
+
+    fun addEarningsRecord(record: EarningsRecord) {
+        earningsHistory = listOf(record) + earningsHistory
+        val json = earningsHistory.joinToString("|") { "${it.date},${it.amount},${it.guests},${it.status}" }
+        prefs.edit().putString("earnings_history", json).apply()
+    }
+
+    fun clearEarningsHistory() {
+        earningsHistory = emptyList()
+        prefs.edit().remove("earnings_history").apply()
+    }
 }
+
+data class EarningsRecord(
+    val date: String,
+    val amount: Double,
+    val guests: Int,
+    val status: String // "completed", "pending", "withdrawn"
+)
 
 // ─── Activity ─────────────────────────────────────────────────────────────
 class MainActivity : ComponentActivity() {
@@ -293,8 +343,35 @@ private fun BeamSpotTheme(content: @Composable () -> Unit) {
 fun BeamSpotApp() {
     val nav = rememberNavController()
     val vm: AppViewModel = viewModel()
+    val context = LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
 
-    NavHost(navController = nav, startDestination = Route.SPLASH) {
+    // Item 29: Check for existing session on startup — skip onboarding if already set up
+    val startDest = remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        val token = sessionManager.getJwtToken()
+        val hasSetup = sessionManager.hasCompletedSetup()
+        if (token != null && hasSetup) {
+            RetrofitClient.setToken(token)
+            // Restore ViewModel state from DataStore
+            vm.userName = sessionManager.getUserName()
+            vm.userEmail = sessionManager.getUserEmail()
+            vm.isDemoMode = sessionManager.isDemoMode()
+            vm.activeListingId = sessionManager.getActiveListingId()
+            vm.selectedMode = sessionManager.getSelectedMode()
+            vm.beamSpotNetworkName = sessionManager.getBeamSpotNetworkName()
+            vm.pricePerMin = sessionManager.getPricePerMin()
+            vm.isSignedIn = true
+            startDest.value = Route.MAIN_APP
+        } else {
+            startDest.value = Route.SPLASH
+        }
+    }
+
+    val currentStart = startDest.value ?: return
+
+    NavHost(navController = nav, startDestination = currentStart) {
         composable(Route.SPLASH)         { SplashScreen(nav) }
         composable(Route.LANDING)        { LandingScreen(nav, vm) }
         composable(Route.SIGN_IN)        { SignInScreen(nav, vm) }
@@ -308,8 +385,97 @@ fun BeamSpotApp() {
         }
         composable(Route.SB_PERMISSIONS) { SmartBridgePermissionsScreen(nav, vm) }
         composable(Route.SB_NAMING)      { SmartBridgeNamingScreen(nav, vm) }
-        composable(Route.DASHBOARD)      { DashboardScreen(nav, vm) }
-        composable(Route.GUEST_PORTAL)   { GuestPortalScreen(nav, vm) }
+        composable(Route.MAIN_APP)       { MainAppScreen(nav, vm) }
+    }
+}
+
+// ─── Main App Screen with Bottom Navigation ───────────────────────────────
+@Composable
+fun MainAppScreen(rootNav: NavHostController, vm: AppViewModel) {
+    val tabNav = rememberNavController()
+    val context = LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
+
+    // Item 30: Save setup completion flag when entering main app
+    LaunchedEffect(Unit) {
+        sessionManager.setCompletedSetup(true)
+        sessionManager.saveJwtToken(RetrofitClient.getToken())
+        sessionManager.saveUserProfile(vm.userName, vm.userEmail, vm.isDemoMode)
+        sessionManager.saveHostSetup(
+            listingId = vm.activeListingId,
+            selectedMode = vm.selectedMode,
+            networkName = vm.beamSpotNetworkName,
+            pricePerMin = vm.pricePerMin
+        )
+    }
+    var selectedTab by remember { mutableStateOf(BottomTab.DASHBOARD) }
+
+    Scaffold(
+        containerColor = Ink,
+        bottomBar = {
+            NavigationBar(
+                containerColor = Panel,
+                contentColor = Paper,
+                tonalElevation = 0.dp,
+                border = BorderStroke(0.5.dp, BorderLine)
+            ) {
+                BottomTab.entries.forEach { tab ->
+                    val isSelected = selectedTab == tab
+                    NavigationBarItem(
+                        selected = isSelected,
+                        onClick = {
+                            selectedTab = tab
+                            tabNav.navigate(tab.route) {
+                                popUpTo(tabNav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                tab.label,
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Cyan,
+                            selectedTextColor = Cyan,
+                            unselectedIconColor = PaperDim,
+                            unselectedTextColor = PaperDim,
+                            indicatorColor = Cyan.copy(0.1f)
+                        )
+                    )
+                }
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = tabNav,
+            startDestination = BottomTab.DASHBOARD.route,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(BottomTab.DASHBOARD.route) {
+                DashboardScreen(rootNav, vm)
+            }
+            composable(BottomTab.FIND_INTERNET.route) {
+                GuestPortalScreen(rootNav, vm)
+            }
+            composable(BottomTab.EARNINGS.route) {
+                EarningsScreen(rootNav, vm)
+            }
+            composable(BottomTab.SETTINGS.route) {
+                SettingsScreen(rootNav, vm)
+            }
+        }
     }
 }
 
@@ -388,7 +554,11 @@ fun LandingScreen(nav: NavHostController, vm: AppViewModel) {
                 subtitle = "Find a nearby BeamSpot and pay for access",
                 accentColor = Amber,
                 icon = Icons.Filled.Wifi,
-                onClick = { nav.navigate(Route.GUEST_PORTAL) }
+                onClick = {
+                    nav.navigate(Route.MAIN_APP) {
+                        popUpTo(Route.LANDING) { inclusive = false }
+                    }
+                }
             )
             LandingCard(
                 title = "I have internet",
@@ -970,13 +1140,19 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
 fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
-    val modes = listOf(
-        Triple("smart_bridge", "Smart Bridge", "Easiest — give us your WiFi password, we handle everything."),
+    // Item 39: Only Smart Bridge is functional — use plain language for the user-facing label
+    val activeModes = listOf(
+        Triple("smart_bridge", "Share your home WiFi", "We'll turn your home internet into a paid hotspot other people nearby can join. Guests pay by the minute."),
         Triple("router",       "Router Mode",  "Best — install a script on your OpenWRT router. Full automatic control."),
         Triple("hotspot",      "Phone Hotspot","Basic — share your mobile data directly. Guests connect manually.")
     )
-    val badges = mapOf("smart_bridge" to "EASIEST SETUP", "router" to "BEST EXPERIENCE", "hotspot" to "LIMITED")
-    val badgeColors = mapOf("smart_bridge" to Cyan, "router" to Amber, "hotspot" to PaperDim)
+    // Item 39: Only Smart Bridge is selectable; other modes shown as inactive/future
+    val modes = activeModes.map { (id, title, desc) ->
+        val isActive = id == "smart_bridge"
+        Triple(id, title, if (isActive) desc else "$desc (Coming soon)")
+    }
+    val badges = mapOf("smart_bridge" to "RECOMMENDED", "router" to "COMING SOON", "hotspot" to "COMING SOON")
+    val badgeColors = mapOf("smart_bridge" to Cyan, "router" to PaperDim, "hotspot" to PaperDim)
 
     Column(
         Modifier.fillMaxSize().background(Ink)
@@ -1303,37 +1479,118 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
+    // Item 34-35: Fix permissions screen — real per-permission state tracking, tap-to-fix, gate Continue
+    var allGranted by remember { mutableStateOf(false) }
+
+    // Check real permission states on every composition
+    LaunchedEffect(Unit) {
+        while (true) {
+            val locationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val notifGranted = if (Build.VERSION.SDK_INT >= 33)
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            else true
+            val writeSettingsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                Settings.System.canWrite(context)
+            else true
+            val batteryGranted = try {
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+                else true
+            } catch (_: Exception) { false }
+            val vpnGranted = VpnService.prepare(context) == null
+
+            perms = perms.toMutableList().apply {
+                find { it.label == "Location" }?.granted = locationGranted
+                find { it.label == "Notifications" }?.granted = notifGranted
+                find { it.label == "Run in background" }?.granted = batteryGranted
+                find { it.label == "VPN" }?.granted = vpnGranted
+                find { it.label == "Battery optimisation" }?.granted = batteryGranted
+                find { it.label == "Modify system settings" }?.granted = writeSettingsGranted
+            }
+            allGranted = locationGranted && notifGranted && writeSettingsGranted && batteryGranted && vpnGranted
+            delay(2000) // Re-check every 2s in case user returns from system settings
+        }
+    }
+
+    fun requestPermissionFor(permLabel: String) {
+        when (permLabel) {
+            "Location" -> {
+                multiPermLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            }
+            "Notifications" -> {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    multiPermLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                }
+            }
+            "VPN" -> {
+                val vpnIntent = VpnService.prepare(context)
+                if (vpnIntent != null) vpnPermLauncher?.launch(vpnIntent)
+            }
+            "Battery optimisation", "Run in background" -> {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try { context.startActivity(intent) } catch (_: Exception) {}
+            }
+            "Modify system settings" -> {
+                val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try { context.startActivity(intent) } catch (_: Exception) {
+                    // Fallback: open app info
+                    val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = android.net.Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    try { context.startActivity(fallback) } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().background(Ink).statusBarsPadding().padding(24.dp)
+    ) {
         Spacer(Modifier.height(40.dp))
         Text("Permissions needed", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
-        Text("BeamSpot needs these to manage guest sessions. You'll see real Android dialogs — not popups from us.", color = PaperDim, fontSize = 13.sp, lineHeight = 19.sp)
+        Text("BeamSpot needs these to manage guest sessions. Tap any permission to request it.", color = PaperDim, fontSize = 13.sp, lineHeight = 19.sp)
         Spacer(Modifier.height(24.dp))
 
         perms.forEach { perm ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
-                Icon(
-                    if (perm.granted) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
-                    null, tint = if (perm.granted) Cyan else PaperDim,
-                    modifier = Modifier.size(20.dp).padding(top = 2.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(perm.label, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(perm.reason, color = PaperDim, fontSize = 12.sp, lineHeight = 16.sp)
+            Surface(
+                onClick = { requestPermissionFor(perm.label) },
+                shape = RoundedCornerShape(12.dp),
+                color = Color.Transparent,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
+                    Icon(
+                        if (perm.granted) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                        null, tint = if (perm.granted) Cyan else PaperDim,
+                        modifier = Modifier.size(22.dp).padding(top = 2.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(perm.label, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(perm.reason, color = PaperDim, fontSize = 12.sp, lineHeight = 16.sp)
+                    }
+                    Icon(Icons.Filled.ChevronRight, null, tint = PaperDim.copy(0.5f), modifier = Modifier.size(18.dp).padding(top = 2.dp))
                 }
             }
             HorizontalDivider(color = BorderLine)
         }
 
         Spacer(Modifier.weight(1f))
-        BeamButton("Grant permissions", Cyan) { requestAll() }
+        BeamButton("Grant all permissions", Cyan) { requestAll() }
         Spacer(Modifier.height(12.dp))
         TextButton(onClick = { nav.navigate(Route.SB_NAMING) }, modifier = Modifier.fillMaxWidth()) {
             Text("Skip for now (some features won't work)", color = PaperDim, fontSize = 12.sp)
         }
         Spacer(Modifier.height(8.dp))
-        BeamButton("Continue →", Cyan.copy(0.5f)) {
+        BeamButton("Continue →", Cyan, enabled = allGranted) {
             nav.navigate(Route.SB_NAMING)
         }
     }
@@ -1374,7 +1631,7 @@ fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
                 delay(1200)
                 vm.vpnActive = true
                 isActivating = false
-                nav.navigate(Route.DASHBOARD) { popUpTo(Route.LANDING) { inclusive = false } }
+                nav.navigate(Route.MAIN_APP) { popUpTo(Route.LANDING) { inclusive = false } }
             }
         }
     }
@@ -1384,7 +1641,7 @@ fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
 // DASHBOARD — real stats, no fake numbers
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
+fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val helper  = remember { WifiScanHelper(context) }
     val scope   = rememberCoroutineScope()
@@ -1519,24 +1776,6 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
                         Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
                     }
                 }
-                IconButton(
-                    onClick = {
-                        if (vm.vpnActive) {
-                            val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
-                                action = BeamSpotVpnService.ACTION_STOP
-                            }
-                            context.startService(vpnIntent)
-                            vm.vpnActive = false
-                        }
-                        vm.logout()
-                        nav.navigate(Route.LANDING) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(Icons.Filled.Logout, contentDescription = "Logout", tint = Color(0xFFEF5350))
-                }
             }
         }
 
@@ -1636,6 +1875,7 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
             Spacer(Modifier.height(10.dp))
             StatCard("Today's Earnings", "KSh ${String.format("%.2f", vm.todayEarnings)}", Icons.Filled.AccountBalanceWallet, Cyan, Modifier.fillMaxWidth())
             Spacer(Modifier.height(20.dp))
+            // Withdraw button — primary action stays on Dashboard for quick access
             BeamButton(
                 label = if (isWithdrawing) "Processing Withdraw…" else "Withdraw to ${vm.payoutMethod.uppercase()}",
                 color = Cyan,
@@ -1648,6 +1888,14 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
                         isWithdrawing = false
                         showWithdrawSuccessDialog = true
                         vm.todayEarnings = 0.0
+                        vm.addEarningsRecord(
+                            EarningsRecord(
+                                date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                                amount = vm.todayEarnings,
+                                guests = vm.guestCount,
+                                status = "withdrawn"
+                            )
+                        )
                     }
                 } else {
                     scope.launch {
@@ -1655,6 +1903,14 @@ fun DashboardScreen(nav: NavHostController, vm: AppViewModel) {
                             RetrofitClient.apiService.withdrawEarnings()
                             showWithdrawSuccessDialog = true
                             vm.todayEarnings = 0.0
+                            vm.addEarningsRecord(
+                                EarningsRecord(
+                                    date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                                    amount = vm.todayEarnings,
+                                    guests = vm.guestCount,
+                                    status = "withdrawn"
+                                )
+                            )
                         } catch (e: Exception) {
                             android.util.Log.e("Withdraw", "Failed to withdraw earnings", e)
                             showWithdrawErrorDialog = e.localizedMessage ?: "Network error"
@@ -1694,75 +1950,468 @@ private fun StatCard(label: String, value: String, icon: androidx.compose.ui.gra
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Reusable components
+// EARNINGS SCREEN — full earnings history, past payouts, withdraw
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-private fun StepBadge(text: String) {
-    Surface(shape = RoundedCornerShape(20.dp), color = Cyan.copy(0.1f)) {
-        Text(text, color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+fun EarningsScreen(rootNav: NavHostController, vm: AppViewModel) {
+    val scope = rememberCoroutineScope()
+    var showWithdrawSuccessDialog by remember { mutableStateOf(false) }
+    var showWithdrawErrorDialog by remember { mutableStateOf("") }
+    var isWithdrawing by remember { mutableStateOf(false) }
+
+    if (showWithdrawSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showWithdrawSuccessDialog = false },
+            title = { Text("Withdrawal Request Sent", color = Paper, fontWeight = FontWeight.Bold) },
+            text = { Text("Your payout has been initiated successfully to your configured payout method (${vm.payoutMethod.uppercase()}: ${vm.payoutNumber}). It will arrive in your account shortly.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = { showWithdrawSuccessDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)
+                ) { Text("OK", fontWeight = FontWeight.Bold) }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    if (showWithdrawErrorDialog.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showWithdrawErrorDialog = "" },
+            title = { Text("Withdrawal Failed", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold) },
+            text = { Text("An error occurred: $showWithdrawErrorDialog. Please try again later.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = { showWithdrawErrorDialog = "" },
+                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper)
+                ) { Text("Close") }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    Column(Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(20.dp))
+        // Header
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.AccountBalanceWallet, null, tint = Cyan, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("Earnings", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Your income history and payouts", color = PaperDim, fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Today's earnings summary card
+        Surface(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = Panel,
+            border = BorderStroke(1.dp, Cyan.copy(0.3f))
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Text("Today's Earnings", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Spacer(Modifier.height(4.dp))
+                Text("KSh ${String.format("%.2f", vm.todayEarnings)}", color = Cyan, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = BorderLine)
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column {
+                        Text("Active Guests", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        Text("${vm.guestCount}", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Rate", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        Text("KSh ${vm.pricePerMin}/min", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Withdraw action
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            BeamButton(
+                label = if (isWithdrawing) "Processing Withdraw…" else "Withdraw to ${vm.payoutMethod.uppercase()}",
+                color = Cyan,
+                enabled = !isWithdrawing && vm.todayEarnings > 0
+            ) {
+                isWithdrawing = true
+                if (vm.isDemoMode) {
+                    scope.launch {
+                        delay(1500)
+                        isWithdrawing = false
+                        showWithdrawSuccessDialog = true
+                        vm.addEarningsRecord(
+                            EarningsRecord(
+                                date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                                amount = vm.todayEarnings,
+                                guests = vm.guestCount,
+                                status = "withdrawn"
+                            )
+                        )
+                        vm.todayEarnings = 0.0
+                    }
+                } else {
+                    scope.launch {
+                        try {
+                            RetrofitClient.apiService.withdrawEarnings()
+                            showWithdrawSuccessDialog = true
+                            vm.addEarningsRecord(
+                                EarningsRecord(
+                                    date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                                    amount = vm.todayEarnings,
+                                    guests = vm.guestCount,
+                                    status = "withdrawn"
+                                )
+                            )
+                            vm.todayEarnings = 0.0
+                        } catch (e: Exception) {
+                            showWithdrawErrorDialog = e.localizedMessage ?: "Network error"
+                        } finally {
+                            isWithdrawing = false
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Earnings history header
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Earnings History", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (vm.earningsHistory.isNotEmpty()) {
+                TextButton(onClick = { vm.clearEarningsHistory() }) {
+                    Text("Clear", color = Amber, fontSize = 12.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        if (vm.earningsHistory.isEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.AccountBalanceWallet, null, tint = PaperDim.copy(0.5f), modifier = Modifier.size(48.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("No earnings history yet", color = PaperDim, fontSize = 14.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Your completed payouts will appear here.", color = PaperDim.copy(0.7f), fontSize = 12.sp, textAlign = TextAlign.Center)
+                }
+            }
+        } else {
+            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                vm.earningsHistory.forEach { record ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Panel,
+                        border = BorderStroke(1.dp, BorderLine),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                when (record.status) {
+                                    "withdrawn" -> Icons.Filled.CheckCircle
+                                    "pending" -> Icons.Filled.Schedule
+                                    else -> Icons.Filled.CheckCircle
+                                },
+                                null,
+                                tint = when (record.status) {
+                                    "withdrawn" -> Cyan
+                                    "pending" -> Amber
+                                    else -> PaperDim
+                                },
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("KSh ${String.format("%.2f", record.amount)}", color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("${record.date} · ${record.guests} guest(s)", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = when (record.status) {
+                                    "withdrawn" -> Cyan.copy(0.12f)
+                                    "pending" -> Amber.copy(0.12f)
+                                    else -> PaperDim.copy(0.1f)
+                                }
+                            ) {
+                                Text(
+                                    record.status.uppercase(),
+                                    color = when (record.status) {
+                                        "withdrawn" -> Cyan
+                                        "pending" -> Amber
+                                        else -> PaperDim
+                                    },
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// SETTINGS SCREEN — sign out, edit payout, stop sharing, permissions
+// ─────────────────────────────────────────────────────────────────────────
 @Composable
-private fun TopBar(title: String, onBack: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Paper) }
-        Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+fun SettingsScreen(rootNav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showStopSharingConfirm by remember { mutableStateOf(false) }
+    var showPayoutEdit by remember { mutableStateOf(false) }
+
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Sign Out", color = Paper, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to sign out? Your active BeamSpot network will be stopped.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogoutConfirm = false
+                        if (vm.vpnActive) {
+                            val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                                action = BeamSpotVpnService.ACTION_STOP
+                            }
+                            context.startService(vpnIntent)
+                            vm.vpnActive = false
+                        }
+                        vm.logout()
+                        rootNav.navigate(Route.LANDING) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828), contentColor = Paper)
+                ) { Text("Sign Out", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("Cancel", color = PaperDim) }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
     }
-}
 
-@Composable
-private fun BeamLabel(text: String) {
-    Text(text, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 5.dp))
-}
-
-@Composable
-private fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
-    OutlinedTextField(
-        value = value, onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text(placeholder, color = PaperDim) },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Paper, unfocusedTextColor = Paper,
-            focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
-            cursorColor = Cyan
-        ),
-        shape = RoundedCornerShape(12.dp),
-        singleLine = true
-    )
-    Spacer(Modifier.height(4.dp))
-}
-
-@Composable
-private fun BeamButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(
-        onClick = onClick, enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(50.dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, disabledContainerColor = color.copy(0.3f))
-    ) {
-        Text(label, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+    if (showStopSharingConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStopSharingConfirm = false },
+            title = { Text("Stop Sharing", color = Paper, fontWeight = FontWeight.Bold) },
+            text = { Text("This will disconnect all active guests and remove your network listing. You can start sharing again anytime.", color = PaperDim, fontSize = 14.sp) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showStopSharingConfirm = false
+                        if (vm.vpnActive) {
+                            val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                                action = BeamSpotVpnService.ACTION_STOP
+                            }
+                            context.startService(vpnIntent)
+                            vm.vpnActive = false
+                        }
+                        vm.beamSpotNetworkName = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Ink)
+                ) { Text("Stop Sharing", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopSharingConfirm = false }) { Text("Cancel", color = PaperDim) }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
     }
-}
 
-@Composable
-private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick, modifier = modifier,
-        shape = RoundedCornerShape(12.dp), color = Panel,
-        border = BorderStroke(1.5.dp, if (selected) Cyan else BorderLine)
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(12.dp)) {
-            Text(
-                label,
-                color = if (selected) Cyan else PaperDim,
-                fontSize = if (label.length > 8) 10.sp else 12.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                softWrap = false
+    Column(Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(20.dp))
+        // Header
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Settings, null, tint = Cyan, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("Settings", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Manage your account and network", color = PaperDim, fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Profile section
+        Surface(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = Panel,
+            border = BorderStroke(1.dp, BorderLine)
+        ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(Cyan.copy(0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        vm.userName.take(2).uppercase(),
+                        color = Cyan,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(vm.userName, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(vm.userEmail, color = PaperDim, fontSize = 12.sp)
+                    if (vm.isDemoMode) {
+                        Surface(shape = RoundedCornerShape(4.dp), color = Amber.copy(0.12f), modifier = Modifier.padding(top = 4.dp)) {
+                            Text("DEMO MODE", color = Amber, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Settings sections
+        SettingsSection("Account") {
+            SettingsItem(
+                icon = Icons.Filled.AccountBalanceWallet,
+                title = "Payout Details",
+                subtitle = "${vm.payoutMethod.uppercase()}: ${vm.payoutNumber.ifEmpty { "Not set" }}",
+                onClick = { showPayoutEdit = true }
             )
+            SettingsItem(
+                icon = Icons.Filled.Logout,
+                title = "Sign Out",
+                subtitle = "Stop sharing and sign out of your account",
+                iconTint = Color(0xFFEF5350),
+                onClick = { showLogoutConfirm = true }
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        SettingsSection("Network") {
+            SettingsItem(
+                icon = Icons.Filled.Wifi,
+                title = "Stop Sharing Network",
+                subtitle = if (vm.vpnActive) "Disconnect all guests and delist" else "Not currently sharing",
+                iconTint = if (vm.vpnActive) Amber else PaperDim,
+                onClick = { if (vm.vpnActive) showStopSharingConfirm = true }
+            )
+            SettingsItem(
+                icon = Icons.Filled.PriceChange,
+                title = "Price Per Minute",
+                subtitle = "KSh ${vm.pricePerMin}/min",
+                onClick = { }
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        SettingsSection("Permissions") {
+            SettingsItem(
+                icon = Icons.Filled.VerifiedUser,
+                title = "Granted Permissions",
+                subtitle = "Location, Notifications, VPN, Background, Battery",
+                onClick = { }
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        SettingsSection("About") {
+            SettingsItem(
+                icon = Icons.Filled.Info,
+                title = "Version",
+                subtitle = "1.0.0",
+                onClick = { }
+            )
+        }
+
+        Spacer(Modifier.height(32.dp))
+    }
+
+    // Payout edit bottom sheet / dialog
+    if (showPayoutEdit) {
+        AlertDialog(
+            onDismissRequest = { showPayoutEdit = false },
+            title = { Text("Edit Payout Details", color = Paper, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Current: ${vm.payoutMethod.uppercase()} — ${vm.payoutNumber.ifEmpty { vm.bankName.ifEmpty { "Not set" } }}", color = PaperDim, fontSize = 13.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("To update your payout method and details, please go through the payout setup flow again.", color = PaperDim, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPayoutEdit = false
+                        rootNav.navigate(Route.PAYOUT_SETUP)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)
+                ) { Text("Update Payout", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPayoutEdit = false }) { Text("Close", color = PaperDim) }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        Text(title, color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(bottom = 8.dp))
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Panel,
+            border = BorderStroke(1.dp, BorderLine),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(content = content)
+        }
+    }
+}
+
+@Composable
+private fun SettingsItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    iconTint: Color = Cyan,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, tint = iconTint, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Paper, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Text(subtitle, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = PaperDim.copy(0.5f), modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -1772,7 +2421,7 @@ private fun PayoutMethodCard(label: String, selected: Boolean, modifier: Modifie
 // ─────────────────────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
+fun GuestPortalScreen(rootNav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val helper = remember { WifiScanHelper(context) }
     val scope = rememberCoroutineScope()
@@ -1898,17 +2547,23 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
         triggerScanWithPermission()
     }
 
-    // Live countdown timer and stats simulation when connected
+    // Item 38: Real speed measurement using TrafficStats (same as host side)
+    // Shows "measuring…" until real data is available — never fabricated numbers
     LaunchedEffect(isConnected) {
         if (isConnected) {
             while (secondsRemaining > 0) {
                 delay(1000)
                 secondsRemaining--
-                // Slight fluctuation in speeds to look completely real
-                currentDlSpeed = (12.0 + Math.random() * 8.0).coerceAtLeast(1.0)
-                currentUlSpeed = (4.0 + Math.random() * 3.5).coerceAtLeast(0.5)
-                // Add a bit of data consumption based on dl speed
-                totalMegabytesConsumed += (currentDlSpeed / 8.0) * 0.1
+                // Use real TrafficStats measurement
+                val startRx = android.net.TrafficStats.getTotalRxBytes()
+                val startTx = android.net.TrafficStats.getTotalTxBytes()
+                delay(2000)
+                val elapsedSec = 2.0
+                val rxBytes = android.net.TrafficStats.getTotalRxBytes() - startRx
+                val txBytes = android.net.TrafficStats.getTotalTxBytes() - startTx
+                currentDlSpeed = if (elapsedSec > 0) (rxBytes * 8) / (elapsedSec * 1_000_000) else 0.0
+                currentUlSpeed = if (elapsedSec > 0) (txBytes * 8) / (elapsedSec * 1_000_000) else 0.0
+                totalMegabytesConsumed += (rxBytes / 1_000_000.0)
             }
             isConnected = false
         }
@@ -1929,14 +2584,12 @@ fun GuestPortalScreen(nav: NavHostController, vm: AppViewModel) {
                     .padding(horizontal = 12.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { nav.popBackStack() }) {
-                    Icon(Icons.Filled.ArrowBack, "Back", tint = Paper)
-                }
                 Text(
                     "BeamSpot Guest Portal",
                     color = Paper,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(start = 16.dp)
                 )
             }
 

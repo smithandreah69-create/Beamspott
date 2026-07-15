@@ -61,6 +61,14 @@
     <!-- ─── Read network traffic stats (speed measurement) ───────── -->
     <uses-permission android:name="android.permission.READ_NETWORK_USAGE_HISTORY" />
 
+    <!-- ─── Modify system settings (WRITE_SETTINGS) for hotspot control ── -->
+    <!--
+        Item 36: Required to programmatically enable/disable WiFi hotspot.
+        The system toggle may appear greyed out on some OEMs (Oplus/ColorOS).
+        We use Settings.ACTION_MANAGE_WRITE_SETTINGS to request this.
+    -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
