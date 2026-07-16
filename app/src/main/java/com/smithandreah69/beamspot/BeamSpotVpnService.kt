@@ -222,259 +222,32 @@ class BeamSpotVpnService : VpnService() {
         }
     }
 
-    private fun configureSoftApSsidAndPassword() {
-        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
-        val desiredSsid = prefs.getString("beam_spot_network_name", "home") ?: "home"
-        val desiredPassword = prefs.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
-
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
-                val builder = builderClass.getDeclaredConstructor().newInstance()
-                
-                val setSsidMethod = builderClass.getMethod("setSsid", String::class.java)
-                setSsidMethod.invoke(builder, desiredSsid)
-                
-                if (desiredPassword.length >= 8) {
-                    val setPassphraseMethod = builderClass.getMethod("setPassphrase", String::class.java, Int::class.javaPrimitiveType)
-                    setPassphraseMethod.invoke(builder, desiredPassword, 4) // 4 is SECURITY_TYPE_WPA2_PSK
-                }
-                
-                val buildMethod = builderClass.getMethod("build")
-                val softApConfig = buildMethod.invoke(builder)
-                
-                val setSoftApConfigurationMethod = wifiManager.javaClass.getMethod("setSoftApConfiguration", Class.forName("android.net.wifi.SoftApConfiguration"))
-                val success = setSoftApConfigurationMethod.invoke(wifiManager, softApConfig) as? Boolean ?: false
-                android.util.Log.i("BeamSpotVpnService", "Programmatically set SoftApConfiguration SSID to $desiredSsid, success: $success")
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Failed to set SoftApConfiguration programmatically", e)
-            }
-        } else {
-            try {
-                val configClass = Class.forName("android.net.wifi.WifiConfiguration")
-                val config = configClass.getDeclaredConstructor().newInstance()
-                
-                val ssidField = configClass.getField("SSID")
-                ssidField.set(config, desiredSsid)
-                
-                if (desiredPassword.length >= 8) {
-                    val preSharedKeyField = configClass.getField("preSharedKey")
-                    preSharedKeyField.set(config, desiredPassword)
-                }
-                
-                val setWifiApConfigurationMethod = wifiManager.javaClass.getMethod("setWifiApConfiguration", configClass)
-                val success = setWifiApConfigurationMethod.invoke(wifiManager, config) as? Boolean ?: false
-                android.util.Log.i("BeamSpotVpnService", "Programmatically set WifiApConfiguration SSID to $desiredSsid, success: $success")
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Failed to set WifiApConfiguration programmatically", e)
-            }
-        }
-    }
-
-    @Suppress("MissingPermission")
-    private fun startLocalOnlyHotspotFallback() {
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        isStaApSupported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            wifiManager.isStaApConcurrencySupported
-        } else {
+    private fun startHotspot() {
+        // The app does not create or configure the hotspot — Android does not allow
+        // regular apps to do this. The host turns on their own hotspot in system
+        // Settings (guided by the UI in Part 2). This function only confirms it's on.
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val isOn = try {
+            val method = wifiManager?.javaClass?.getMethod("isWifiApEnabled")
+            method?.invoke(wifiManager) as? Boolean ?: false
+        } catch (e: Exception) {
             false
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
-                        override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
-                            super.onStarted(reservation)
-                            hotspotReservation = reservation
-                            val config = reservation.wifiConfiguration
-                            actualHotspotSsid = config?.SSID ?: ""
-                            actualHotspotPassword = config?.preSharedKey ?: ""
-                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot started fallback. SSID: $actualHotspotSsid, password: $actualHotspotPassword")
-                        }
-
-                        override fun onStopped() {
-                            super.onStopped()
-                            hotspotReservation = null
-                            actualHotspotSsid = ""
-                            actualHotspotPassword = ""
-                            android.util.Log.i("BeamSpotVpnService", "LocalOnlyHotspot fallback stopped")
-                        }
-
-                        override fun onFailed(reason: Int) {
-                            super.onFailed(reason)
-                            hotspotReservation = null
-                            actualHotspotSsid = ""
-                            actualHotspotPassword = ""
-                            android.util.Log.e("BeamSpotVpnService", "LocalOnlyHotspot fallback failed with reason code: $reason")
-                        }
-                    }, Handler(Looper.getMainLooper()))
-                } else {
-                    android.util.Log.w("BeamSpotVpnService", "Cannot start LocalOnlyHotspot fallback: ACCESS_FINE_LOCATION not granted.")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Exception starting LocalOnlyHotspot fallback", e)
-            }
-        }
-    }
-
-    @android.annotation.SuppressLint("MissingPermission")
-    private fun startHotspot() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!android.provider.Settings.System.canWrite(applicationContext)) {
-                val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
-                    data = android.net.Uri.parse("package:$packageName")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    startActivity(intent)
-                    Handler(Looper.getMainLooper()).post {
-                        android.widget.Toast.makeText(applicationContext, "Please allow Write Settings permission to enable Hotspot", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("BeamSpotVpnService", "Failed to launch write settings activity", e)
-                }
-                stopVpn()
-                return
-            }
-        }
-
-        // Configure SSID and Password first so that portable hotspots and reflection use the custom SSID!
-        configureSoftApSsidAndPassword()
-
-        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
-        val hasSetup = prefs.getBoolean("has_done_hotspot_setup", false)
-        if (!hasSetup) {
-            prefs.edit().putBoolean("has_done_hotspot_setup", true).apply()
-            val intent = Intent().apply {
-                action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                startActivity(intent)
-                Handler(Looper.getMainLooper()).post {
-                    android.widget.Toast.makeText(applicationContext, "Configure your Hotspot name and password, then return to start BeamSpot.", android.widget.Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                try {
-                    val fallbackIntent = Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(fallbackIntent)
-                } catch (_: Exception) {}
-            }
+        if (!isOn) {
+            android.util.Log.e("BeamSpotVpnService", "startHotspot called but native hotspot is not actually on — stopping VPN.")
             stopVpn()
             return
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ (API 30+) uses TetheringManager / startTethering reflection
-            try {
-                val tm = applicationContext.getSystemService("tethering")
-                if (tm != null) {
-                    val tmClass = tm.javaClass
-                    val callbackClass = Class.forName("android.net.TetheringManager\$StartTetheringCallback")
-                    val executorClass = java.util.concurrent.Executor::class.java
-                    
-                    val startTetheringMethod = tmClass.getMethod(
-                        "startTethering",
-                        Int::class.javaPrimitiveType,
-                        executorClass,
-                        callbackClass
-                    )
-                    
-                    val callbackProxy = java.lang.reflect.Proxy.newProxyInstance(
-                        callbackClass.classLoader,
-                        arrayOf(callbackClass),
-                        object : java.lang.reflect.InvocationHandler {
-                            override fun invoke(proxy: Any?, method: java.lang.reflect.Method?, args: Array<out Any>?): Any? {
-                                if (method?.name == "onTetheringStarted") {
-                                    android.util.Log.i("BeamSpotVpnService", "Tethering started successfully!")
-                                    val prefsObj = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
-                                    actualHotspotSsid = prefsObj.getString("beam_spot_network_name", "BeamSpot Hotspot") ?: "BeamSpot Hotspot"
-                                    actualHotspotPassword = prefsObj.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
-                                } else if (method?.name == "onTetheringFailed") {
-                                    val error = args?.get(0) as? Int ?: -1
-                                    android.util.Log.e("BeamSpotVpnService", "Tethering failed with error code: $error. Falling back to LocalOnlyHotspot.")
-                                    startLocalOnlyHotspotFallback()
-                                }
-                                return null
-                            }
-                        }
-                    )
-                    
-                    val mainExecutor = applicationContext.mainExecutor
-                    startTetheringMethod.invoke(tm, 0, mainExecutor, callbackProxy) // 0 is TETHERING_WIFI
-                    isStaApSupported = true
-                    android.util.Log.i("BeamSpotVpnService", "Tethering started via TetheringManager on Android 11+.")
-                    return
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Error starting tethering on Android 11+, trying LocalOnlyHotspot fallback", e)
-                startLocalOnlyHotspotFallback()
-                return
-            }
-        }
-
-        // Fallback or Legacy: Android 8.0 to 10 (API 26-29)
-        // Try calling the hidden WifiManager.setWifiApEnabled (no callback needed)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            try {
-                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                if (wifiManager != null) {
-                    val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
-                        "setWifiApEnabled",
-                        android.net.wifi.WifiConfiguration::class.java,
-                        Boolean::class.javaPrimitiveType
-                    )
-                    setWifiApEnabledMethod.invoke(wifiManager, null, true)
-                    val prefsObj = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
-                    actualHotspotSsid = prefsObj.getString("beam_spot_network_name", "BeamSpot Hotspot") ?: "BeamSpot Hotspot"
-                    actualHotspotPassword = prefsObj.getString("beam_spot_network_password", "beamspot123") ?: "beamspot123"
-                    android.util.Log.i("BeamSpotVpnService", "Legacy tethering enabled via WifiManager.")
-                    return
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Error starting legacy tethering, trying standard LocalOnlyHotspot fallback", e)
-            }
-        }
-
-        // Default: Start LocalOnlyHotspot fallback
-        startLocalOnlyHotspotFallback()
+        isStaApSupported = true
+        // Read back whatever the host actually configured, so the Dashboard shows the real name —
+        // this value must come from what VerifySetupScreen/HotspotSetupScreen stored after the user
+        // confirmed it themselves, not from anything the app tried to set.
+        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+        actualHotspotSsid = prefs.getString("beam_spot_network_name", "") ?: ""
+        actualHotspotPassword = prefs.getString("beam_spot_network_password", "") ?: ""
     }
 
     private fun stopHotspot() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val tm = applicationContext.getSystemService("tethering")
-                if (tm != null) {
-                    val stopTetheringMethod = tm.javaClass.getMethod("stopTethering", Int::class.javaPrimitiveType)
-                    stopTetheringMethod.invoke(tm, 0) // 0 is TETHERING_WIFI
-                    android.util.Log.i("BeamSpotVpnService", "Tethering stopped successfully on Android 11+")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Error stopping tethering on Android 11+", e)
-            }
-        }
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            try {
-                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                if (wifiManager != null) {
-                    val setWifiApEnabledMethod = wifiManager.javaClass.getMethod(
-                        "setWifiApEnabled",
-                        android.net.wifi.WifiConfiguration::class.java,
-                        Boolean::class.javaPrimitiveType
-                    )
-                    setWifiApEnabledMethod.invoke(wifiManager, null, false)
-                    android.util.Log.i("BeamSpotVpnService", "Legacy tethering disabled via WifiManager.")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BeamSpotVpnService", "Error stopping legacy tethering", e)
-            }
-        }
-
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 hotspotReservation?.close()

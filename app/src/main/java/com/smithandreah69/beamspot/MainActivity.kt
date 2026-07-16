@@ -2969,6 +2969,7 @@ fun HotspotStepItem(
 fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val sessionManager = remember { SessionManager(context) }
     var activeStep by remember { mutableStateOf(1) }
 
     // State Fields
@@ -2979,7 +2980,6 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
     // Status states
     var isCellularActive by remember { mutableStateOf(false) }
-    var formError by remember { mutableStateOf("") }
     var hotspotTurnedOn by remember { mutableStateOf(false) }
     var connectedClientsList by remember { mutableStateOf<List<String>>(emptyList()) }
 
@@ -3043,7 +3043,47 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         }
     }
 
-    // Sequential Polling Loops using LaunchedEffect
+    // Helper to read SoftAp configuration via reflection and pre-populate fields
+    fun getSoftApSsidAndPrepopulate() {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val getSoftApConfigurationMethod = wifiManager.javaClass.getMethod("getSoftApConfiguration")
+                val softApConfig = getSoftApConfigurationMethod.invoke(wifiManager)
+                if (softApConfig != null) {
+                    val getSsidMethod = softApConfig.javaClass.getMethod("getSsid")
+                    val ssid = getSsidMethod.invoke(softApConfig) as? String
+                    if (!ssid.isNullOrEmpty()) {
+                        ssidName = ssid
+                    }
+                    val getPassphraseMethod = softApConfig.javaClass.getMethod("getPassphrase")
+                    val passphrase = getPassphraseMethod.invoke(softApConfig) as? String
+                    if (!passphrase.isNullOrEmpty()) {
+                        passwordField = passphrase
+                    }
+                }
+            } else {
+                val getWifiApConfigurationMethod = wifiManager.javaClass.getMethod("getWifiApConfiguration")
+                val wifiApConfig = getWifiApConfigurationMethod.invoke(wifiManager)
+                if (wifiApConfig != null) {
+                    val ssidField = wifiApConfig.javaClass.getField("SSID")
+                    val ssid = ssidField.get(wifiApConfig) as? String
+                    if (!ssid.isNullOrEmpty()) {
+                        ssidName = ssid
+                    }
+                    val preSharedKeyField = wifiApConfig.javaClass.getField("preSharedKey")
+                    val key = preSharedKeyField.get(wifiApConfig) as? String
+                    if (!key.isNullOrEmpty()) {
+                        passwordField = key
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BeamSpot", "Failed to read soft AP config via reflection", e)
+        }
+    }
+
+    // Polling Loops for sequential steps
     LaunchedEffect(activeStep) {
         if (activeStep == 1) {
             while (activeStep == 1) {
@@ -3058,12 +3098,22 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
     }
 
     LaunchedEffect(activeStep) {
-        if (activeStep == 3) {
-            while (activeStep == 3) {
+        if (activeStep == 2) {
+            getSoftApSsidAndPrepopulate()
+            while (activeStep == 2) {
                 val enabled = isNativeHotspotEnabled()
                 if (enabled) {
+                    getSoftApSsidAndPrepopulate()
+                    // Save to preferences and ViewModel
+                    val prefs = context.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                    prefs.edit()
+                        .putString("beam_spot_network_name", ssidName)
+                        .putString("beam_spot_network_password", passwordField)
+                        .apply()
+                    vm.beamSpotNetworkName = ssidName
+                    vm.routerGuestPassword = passwordField
                     hotspotTurnedOn = true
-                    activeStep = 4
+                    activeStep = 3
                 }
                 delay(2000)
             }
@@ -3072,6 +3122,18 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
     LaunchedEffect(activeStep) {
         if (activeStep == 4) {
+            // Start the BeamSpotVpnService
+            val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
+                action = BeamSpotVpnService.ACTION_START
+                putExtra("EXTRA_LISTING_ID", vm.activeListingId)
+            }
+            try {
+                context.startService(vpnIntent)
+                vm.vpnActive = true
+            } catch (e: Exception) {
+                android.util.Log.e("BeamSpot", "Failed to start service on step 4", e)
+            }
+
             while (activeStep == 4) {
                 val clients = getConnectedArpClients()
                 connectedClientsList = clients
@@ -3084,13 +3146,14 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         Modifier
             .fillMaxSize()
             .background(Ink)
-            .verticalScroll(rememberScrollState())
             .padding(24.dp)
     ) {
         Spacer(Modifier.height(40.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().clickable { nav.popBackStack() }
+            modifier = Modifier
+                .clickable { nav.popBackStack() }
+                .padding(vertical = 8.dp)
         ) {
             Icon(Icons.Filled.ArrowBack, null, tint = PaperDim, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
@@ -3098,297 +3161,283 @@ fun HotspotSetupScreen(nav: NavHostController, vm: AppViewModel) {
         }
         Spacer(Modifier.height(16.dp))
 
-        StepBadge("Phone Hotspot Setup")
-        Spacer(Modifier.height(10.dp))
-        Text("Share your Mobile Data", color = Paper, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-
-        SecuritySafeguardsCard()
-
-        if (formError.isNotEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFEF5350).copy(0.1f),
-                border = BorderStroke(1.dp, Color(0xFFEF5350).copy(0.3f)),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)
-            ) {
-                Text(formError, color = Color(0xFFEF5350), fontSize = 12.sp, modifier = Modifier.padding(12.dp))
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 1: MOBILE DATA CELLULAR CHECK
-        // ─────────────────────────────────────────────────────────────────────
-        HotspotStepItem(
-            stepNumber = 1,
-            title = "Verify Cellular Internet Connectivity",
-            difficulty = "Easy",
-            difficultyColor = Cyan,
-            whatItDoes = "Verifies if your phone's mobile cellular internet interface is active and receiving telemetry signals.",
-            whyItNeeded = "Guests need an active internet pipe to route their traffic. Wi-Fi sharing requires your phone to get internet from the carrier SIM.",
-            fallback = "If cellular data is disabled, ensure you have an active SIM card and data balance from your carrier.",
-            isCompleted = isCellularActive,
-            isActive = activeStep == 1
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Panel.copy(alpha = 0.5f),
-                    border = BorderStroke(1.dp, BorderLine),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        // Simple step-by-step layout showing exactly one screen/step at a time
+        when (activeStep) {
+            1 -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            text = "🔴 No active cellular data connection detected.",
-                            color = Color(0xFFEF5350),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Turn on Mobile Data in your phone settings, then this screen will update automatically. We check for real signal every 2 seconds.",
-                            color = PaperDim,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                }
+                    Text("Step 1 of 4: Mobile Data", color = Cyan, fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Text("Verify Mobile Data Connection", color = Paper, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Guests require an active internet path to route their traffic. BeamSpot shares your mobile carrier data.",
+                        color = PaperDim,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
 
-                Button(
-                    onClick = {
-                        val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        try {
-                            context.startActivity(intent)
-                        } catch (_: Exception) {}
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open Mobile Settings ⚙", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
+                    Spacer(Modifier.height(20.dp))
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 2: SET HOTSPOT SSID & PASSWORD
-        // ─────────────────────────────────────────────────────────────────────
-        HotspotStepItem(
-            stepNumber = 2,
-            title = "Set Hotspot Name & Credentials",
-            difficulty = "Easy",
-            difficultyColor = Cyan,
-            whatItDoes = "Takes your custom SSID inputs and applies validation checks.",
-            whyItNeeded = "Your SSID and password must match standard IEEE 802.11 limits so that guest phones can properly discover and negotiate connections.",
-            fallback = "Can't find Hotspot settings? Search 'hotspot' in your phone's Settings search bar.",
-            isCompleted = activeStep > 2,
-            isActive = activeStep == 2
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BeamLabel("Master Hotspot Name (SSID)")
-                BeamInput(value = ssidName, onValueChange = { ssidName = it }, placeholder = "e.g. MamaJane_WiFi")
-
-                BeamLabel("Hotspot Password (Optional, blank = Open)")
-                BeamInput(value = passwordField, onValueChange = { passwordField = it }, placeholder = "Min 8 characters or leave empty")
-
-                BeamLabel("Price per Minute (KES)")
-                BeamInput(value = pricePerMinText, onValueChange = { pricePerMinText = it }, placeholder = "e.g. 2.0", keyboardType = KeyboardType.Number)
-
-                Button(
-                    onClick = {
-                        if (ssidName.isBlank() || ssidName.length > 32 || !ssidName.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == ' ' }) {
-                            formError = "⚠️ SSID must be 1-32 chars, containing only letters, numbers, spaces, underscores, or hyphens."
-                            return@Button
-                        }
-                        if (passwordField.isNotEmpty() && passwordField.length < 8) {
-                            formError = "⚠️ Hotspot password must be at least 8 characters long for secure WPA2."
-                            return@Button
-                        }
-                        val priceVal = pricePerMinText.toDoubleOrNull()
-                        if (priceVal == null || priceVal <= 0.0) {
-                            formError = "⚠️ Price must be a positive number greater than 0.0."
-                            return@Button
-                        }
-                        formError = ""
-                        vm.beamSpotNetworkName = ssidName
-                        vm.routerGuestPassword = passwordField
-                        vm.pricePerMin = priceVal
-                        activeStep = 3
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text("Confirm Credentials & Lock In", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 3: TURN HOTSPOT ON
-        // ─────────────────────────────────────────────────────────────────────
-        HotspotStepItem(
-            stepNumber = 3,
-            title = "Toggle Portable Hotspot ON",
-            difficulty = "Easy",
-            difficultyColor = Cyan,
-            whatItDoes = "Launches system tethering settings and detects active AP state broadcasts.",
-            whyItNeeded = "Physical hardware antennas must turn on to start broadcasting SSID beacons.",
-            fallback = "If it turned off by itself, your battery saver may be disabling hotspot — check battery optimization settings for this app.",
-            isCompleted = hotspotTurnedOn,
-            isActive = activeStep == 3
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Please navigate to your device settings using the button below, and toggle 'Portable Hotspot' (or 'WiFi Tethering') to ON.\n\nEnsure you set the SSID name to \"$ssidName\" and security matches what you specified.",
-                    color = PaperDim,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
-                )
-
-                Button(
-                    onClick = {
-                        val intent = Intent().apply {
-                            action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            try {
-                                val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(fallbackIntent)
-                            } catch (_: Exception) {}
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open Hotspot System Settings ⚙", fontWeight = FontWeight.Bold)
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Panel.copy(alpha = 0.5f),
-                    border = BorderStroke(1.dp, BorderLine),
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(color = Amber, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "Waiting for hotspot broadcast signal... (We poll live every 2 seconds. No need to click anything once enabled!)",
-                            color = PaperDim,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 4: CONFIRM GUEST CONNECTION
-        // ─────────────────────────────────────────────────────────────────────
-        HotspotStepItem(
-            stepNumber = 4,
-            title = "Active Guest Device Handshake",
-            difficulty = "Moderate",
-            difficultyColor = Amber,
-            whatItDoes = "Listens for secondary MAC address handshakes on your active broadcast channel.",
-            whyItNeeded = "Confirms that a second device can physically join and fetch payment templates correctly before you start billing.",
-            fallback = "Still not visible on another phone? Make sure both devices have WiFi turned on (not just data), and that no other hotspot with the same name is nearby causing confusion.",
-            isCompleted = false,
-            isActive = activeStep == 4
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Panel,
-                    border = BorderStroke(1.dp, BorderLine),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("📡 Active Broadcast Info:", color = Cyan, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                        Text("SSID: $ssidName", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        if (passwordField.isNotEmpty()) {
-                            Text("Password: $passwordField", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        } else {
-                            Text("Security: Open (No Password)", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        }
-                        Text("Rate: KES $pricePerMinText / min", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    }
-                }
-
-                if (connectedClientsList.isEmpty()) {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = Panel.copy(alpha = 0.5f),
                         border = BorderStroke(1.dp, BorderLine),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
+                            modifier = Modifier.padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularProgressIndicator(color = Cyan, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(10.dp))
+                            CircularProgressIndicator(color = Amber, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
                             Text(
-                                "Waiting for a device to connect...\nJoin \"$ssidName\" on another phone to continue.",
+                                "Waiting for mobile data to be turned on...\nWe verify live every 2 seconds.",
                                 color = PaperDim,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
                             )
                         }
                     }
-                } else {
+
+                    Spacer(Modifier.weight(1f))
+
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (_: Exception) {}
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open Mobile Data Settings", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            2 -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Step 2 of 4: Enable Hotspot", color = Cyan, fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Text("Turn On Hotspot", color = Paper, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Turn on your phone's Hotspot in Settings. Give it any name and password you like — at least 8 characters. This is the real network other people will join and pay to use.",
+                        color = PaperDim,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    BeamLabel("Verify the Hotspot Name (SSID) you set:")
+                    BeamInput(value = ssidName, onValueChange = { ssidName = it }, placeholder = "e.g. MamaJane_WiFi")
+
+                    BeamLabel("Verify the Hotspot Password you set (at least 8 chars):")
+                    BeamInput(value = passwordField, onValueChange = { passwordField = it }, placeholder = "e.g. mysecretpass")
+
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF2E7D32).copy(alpha = 0.15f),
-                        border = BorderStroke(1.dp, Color(0xFF2E7D32).copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Panel.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, BorderLine),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Real device connected successfully!", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(color = Amber, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "Waiting for native hotspot to start...\nOnce toggled on, we will auto-advance.",
+                                color = PaperDim,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    Button(
+                        onClick = {
+                            val intent = Intent().apply {
+                                action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            Spacer(Modifier.height(6.dp))
-                            Text("Detected MAC(s):", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            connectedClientsList.forEach { mac ->
-                                Text("• $mac", color = Paper, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                try {
+                                    val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(fallbackIntent)
+                                } catch (_: Exception) {}
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Filled.Settings, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open Hotspot Settings", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            3 -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Step 3 of 4: Pricing Model", color = Cyan, fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Text("Set Your Price", color = Paper, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Specify how much you want to charge guests per minute of connectivity.",
+                        color = PaperDim,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    BeamLabel("Price per Minute (KES)")
+                    BeamInput(value = pricePerMinText, onValueChange = { pricePerMinText = it }, placeholder = "e.g. 2.0", keyboardType = KeyboardType.Number)
+
+                    Spacer(Modifier.weight(1f))
+
+                    val priceVal = pricePerMinText.toDoubleOrNull()
+                    val isValid = priceVal != null && priceVal > 0.0
+
+                    Button(
+                        onClick = {
+                            if (isValid) {
+                                vm.pricePerMin = priceVal!!
+                                activeStep = 4
+                            }
+                        },
+                        enabled = isValid,
+                        colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink, disabledContainerColor = Panel.copy(alpha = 0.5f), disabledContentColor = PaperDim.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("Continue", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            4 -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Step 4 of 4: Verification", color = Cyan, fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Text("Real Guest Connection", color = Paper, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Verify your hotspot is actively routing. Guests joining are automatically redirected to the paywall.",
+                        color = PaperDim,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Panel,
+                        border = BorderStroke(1.dp, BorderLine),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("📡 Broadcast Status:", color = Cyan, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                            Text("Network Name (SSID): $ssidName", color = Paper, fontSize = 13.sp)
+                            if (passwordField.isNotEmpty()) {
+                                Text("Password: $passwordField", color = Paper, fontSize = 13.sp)
+                            } else {
+                                Text("Security: Open", color = Paper, fontSize = 13.sp)
+                            }
+                            Text("Rate: KES $pricePerMinText / min", color = Paper, fontSize = 13.sp)
+                        }
+                    }
+
+                    if (connectedClientsList.isEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Panel.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, BorderLine),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(color = Cyan, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    "Waiting for a device to join...\nJoin \"$ssidName\" on another phone.",
+                                    color = PaperDim,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF2E7D32).copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, Color(0xFF2E7D32).copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Guest connected successfully!", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Text("Connected MAC Address(es):", color = PaperDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                connectedClientsList.forEach { mac ->
+                                    Text("• $mac", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                }
                             }
                         }
                     }
-                }
 
-                Button(
-                    onClick = {
-                        nav.navigate(Route.VERIFY_SETUP)
-                    },
-                    enabled = connectedClientsList.isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink, disabledContainerColor = Panel.copy(alpha = 0.5f), disabledContentColor = PaperDim.copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text("Proceed to Launch Dashboard →", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                sessionManager.setCompletedSetup(true)
+                                sessionManager.saveJwtToken(RetrofitClient.getToken())
+                                sessionManager.saveUserProfile(vm.userName, vm.userEmail, vm.isDemoMode)
+                                sessionManager.saveHostSetup(
+                                    listingId = vm.activeListingId,
+                                    selectedMode = vm.selectedMode,
+                                    networkName = vm.beamSpotNetworkName,
+                                    pricePerMin = vm.pricePerMin
+                                )
+                                nav.navigate(Route.MAIN_APP) {
+                                    popUpTo(Route.LANDING) { inclusive = false }
+                                }
+                            }
+                        },
+                        enabled = connectedClientsList.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink, disabledContainerColor = Panel.copy(alpha = 0.5f), disabledContentColor = PaperDim.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("Finish Setup", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
-
-        Spacer(Modifier.height(30.dp))
     }
 }
 
@@ -3501,30 +3550,6 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
 
                     // Timeout
                     verifyError = "We could not detect any WiFi network named '${vm.routerGuestSsid}' broadcasting nearby."
-                    isVerifying = false
-                }
-
-                "hotspot" -> {
-                    logMessage = "Detecting active Phone Hotspot..."
-                    showSettingTip = true
-                    
-                    var attempts = 0
-                    while (attempts < 15) {
-                        delay(1500)
-                        attempts++
-                        
-                        val active = isNativeHotspotEnabled()
-                        logMessage = "Monitoring phone tethering interfaces (attempt $attempts/15)..."
-                        
-                        if (active) {
-                            verifySuccess = true
-                            isVerifying = false
-                            return@launch
-                        }
-                    }
-
-                    // Timeout
-                    verifyError = "Could not detect active native hotspot. Please ensure Hotspot/Tethering is turned ON in your system settings."
                     isVerifying = false
                 }
             }
