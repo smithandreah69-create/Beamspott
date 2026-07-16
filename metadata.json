@@ -1,6 +1,6 @@
 {
   "name": "BeamSpot",
-  "description": "Peer-to-peer internet sharing marketplace. Set up your hotspot or router, set your price, and earn automatically. Connect nearby with zero passwords, simple local payments.",
+  "description": "Automated ISP Hotspot billing gateway. Link your MikroTik RouterOS with Safaricom M-Pesa Daraja API for automated pay-per-tier internet access billing and instant KES settlement.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

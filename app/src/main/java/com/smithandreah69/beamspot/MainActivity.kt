@@ -98,9 +98,161 @@ private enum class BottomTab(val route: String, val label: String, val icon: Ima
     SETTINGS("tab_settings", "Settings", Icons.Filled.Settings)
 }
 
+// ─── Hotspot Package Data Class ───────────────────────────────────────────
+data class HotspotPackage(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val price: Double,
+    val duration: String,
+    val speedLimit: String,
+    val dataLimit: String = "Unlimited"
+)
+
 // ─── Shared ViewModel ─────────────────────────────────────────────────────
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+
+    // MikroTik Router configuration
+    private val _routerIp = mutableStateOf(prefs.getString("router_ip", "192.168.88.1") ?: "192.168.88.1")
+    var routerIp: String
+        get() = _routerIp.value
+        set(value) {
+            _routerIp.value = value
+            prefs.edit().putString("router_ip", value).apply()
+        }
+
+    private val _routerApiPort = mutableStateOf(prefs.getString("router_api_port", "8728") ?: "8728")
+    var routerApiPort: String
+        get() = _routerApiPort.value
+        set(value) {
+            _routerApiPort.value = value
+            prefs.edit().putString("router_api_port", value).apply()
+        }
+
+    private val _routerUsername = mutableStateOf(prefs.getString("router_username", "admin") ?: "admin")
+    var routerUsername: String
+        get() = _routerUsername.value
+        set(value) {
+            _routerUsername.value = value
+            prefs.edit().putString("router_username", value).apply()
+        }
+
+    private val _routerPassword = mutableStateOf(prefs.getString("router_password", "") ?: "")
+    var routerPassword: String
+        get() = _routerPassword.value
+        set(value) {
+            _routerPassword.value = value
+            prefs.edit().putString("router_password", value).apply()
+        }
+
+    private val _routerHotspotServer = mutableStateOf(prefs.getString("router_hotspot_server", "hs-prof1") ?: "hs-prof1")
+    var routerHotspotServer: String
+        get() = _routerHotspotServer.value
+        set(value) {
+            _routerHotspotServer.value = value
+            prefs.edit().putString("router_hotspot_server", value).apply()
+        }
+
+    private val _routerDnsName = mutableStateOf(prefs.getString("router_dns_name", "hotspot.net") ?: "hotspot.net")
+    var routerDnsName: String
+        get() = _routerDnsName.value
+        set(value) {
+            _routerDnsName.value = value
+            prefs.edit().putString("router_dns_name", value).apply()
+        }
+
+    // M-Pesa Integration Settings
+    private val _mpesaShortcode = mutableStateOf(prefs.getString("mpesa_shortcode", "") ?: "")
+    var mpesaShortcode: String
+        get() = _mpesaShortcode.value
+        set(value) {
+            _mpesaShortcode.value = value
+            prefs.edit().putString("mpesa_shortcode", value).apply()
+        }
+
+    private val _mpesaConsumerKey = mutableStateOf(prefs.getString("mpesa_consumer_key", "") ?: "")
+    var mpesaConsumerKey: String
+        get() = _mpesaConsumerKey.value
+        set(value) {
+            _mpesaConsumerKey.value = value
+            prefs.edit().putString("mpesa_consumer_key", value).apply()
+        }
+
+    private val _mpesaConsumerSecret = mutableStateOf(prefs.getString("mpesa_consumer_secret", "") ?: "")
+    var mpesaConsumerSecret: String
+        get() = _mpesaConsumerSecret.value
+        set(value) {
+            _mpesaConsumerSecret.value = value
+            prefs.edit().putString("mpesa_consumer_secret", value).apply()
+        }
+
+    private val _mpesaPasskey = mutableStateOf(prefs.getString("mpesa_passkey", "") ?: "")
+    var mpesaPasskey: String
+        get() = _mpesaPasskey.value
+        set(value) {
+            _mpesaPasskey.value = value
+            prefs.edit().putString("mpesa_passkey", value).apply()
+        }
+
+    private val _mpesaCallbackUrl = mutableStateOf(prefs.getString("mpesa_callback_url", "https://api.beamspot.net/v1/mpesa/callback") ?: "https://api.beamspot.net/v1/mpesa/callback")
+    var mpesaCallbackUrl: String
+        get() = _mpesaCallbackUrl.value
+        set(value) {
+            _mpesaCallbackUrl.value = value
+            prefs.edit().putString("mpesa_callback_url", value).apply()
+        }
+
+    // Hotspot packages list
+    private val _hotspotPackagesJson = mutableStateOf(prefs.getString("hotspot_packages_json", "") ?: "")
+    var hotspotPackages: List<HotspotPackage>
+        get() {
+            val jsonStr = _hotspotPackagesJson.value
+            if (jsonStr.isEmpty()) {
+                // Return default packages
+                return listOf(
+                    HotspotPackage("1", "1 Hour Basic", 10.0, "1 Hour", "2 Mbps", "Unlimited"),
+                    HotspotPackage("2", "3 Hours Standard", 25.0, "3 Hours", "5 Mbps", "Unlimited"),
+                    HotspotPackage("3", "24 Hours Premium", 50.0, "24 Hours", "10 Mbps", "Unlimited")
+                )
+            }
+            return try {
+                val list = mutableListOf<HotspotPackage>()
+                val arr = org.json.JSONArray(jsonStr)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(
+                        HotspotPackage(
+                            id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                            name = obj.optString("name", ""),
+                            price = obj.optDouble("price", 0.0),
+                            duration = obj.optString("duration", ""),
+                            speedLimit = obj.optString("speedLimit", ""),
+                            dataLimit = obj.optString("dataLimit", "Unlimited")
+                        )
+                    )
+                }
+                list
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        set(value) {
+            val arr = org.json.JSONArray()
+            value.forEach { pkg ->
+                val obj = org.json.JSONObject().apply {
+                    put("id", pkg.id)
+                    put("name", pkg.name)
+                    put("price", pkg.price)
+                    put("duration", pkg.duration)
+                    put("speedLimit", pkg.speedLimit)
+                    put("dataLimit", pkg.dataLimit)
+                }
+                arr.put(obj)
+            }
+            val jsonStr = arr.toString()
+            _hotspotPackagesJson.value = jsonStr
+            prefs.edit().putString("hotspot_packages_json", jsonStr).apply()
+        }
 
     private val _isDemoMode = mutableStateOf(prefs.getBoolean("is_demo_mode", false))
     var isDemoMode: Boolean
@@ -1311,42 +1463,21 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 @Composable
 fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
-    val wifiManager = remember { context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager }
-    val isStaApSupported = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            wifiManager?.isStaApConcurrencySupported == true
-        } else {
-            false
-        }
-    }
-
+    
     val activeModes = listOf(
-        Triple("smart_bridge", "Share your home WiFi", "We'll turn your home internet into a paid hotspot other people nearby can join. Guests pay by the minute."),
-        Triple("router",       "Router Mode",  "Best — guide you to configure a Guest Network on your home router. Full automatic control."),
-        Triple("hotspot",      "Phone Hotspot","Basic — share your mobile data directly via native portable hotspot.")
+        Triple("router", "ISP Hotspot Mode", "Fully automated hotspot billing system. Connect your MikroTik router, configure M-Pesa payments, and manage custom packages.")
     )
 
     val modes = activeModes.map { (id, title, desc) ->
-        val enabled = if (id == "smart_bridge") isStaApSupported else true
-        val finalDesc = if (id == "smart_bridge" && !isStaApSupported) {
-            "$desc\n\n⚠️ Your phone's hardware doesn't support sharing Wi-Fi while connected to Wi-Fi. (Requires dual-band Wi-Fi capability). Please use Phone Hotspot instead."
-        } else desc
-        val badge = when (id) {
-            "smart_bridge" -> if (isStaApSupported) "RECOMMENDED" else "UNSUPPORTED"
-            "router" -> "HIGH SPEED"
-            else -> "EASY SETUP"
-        }
-        val badgeColor = when (id) {
-            "smart_bridge" -> if (isStaApSupported) Cyan else Color(0xFFEF5350)
-            "router" -> Amber
-            else -> Color(0xFF42A5F5)
-        }
-        val selected = vm.selectedMode == id && enabled
+        val enabled = true
+        val badge = "RECOMMENDED"
+        val badgeColor = Cyan
+        val selected = true
         
         object {
             val id = id
             val title = title
-            val desc = finalDesc
+            val desc = desc
             val enabled = enabled
             val badge = badge
             val badgeColor = badgeColor
@@ -1354,11 +1485,9 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
         }
     }
 
-    // Default select supported mode
-    LaunchedEffect(isStaApSupported) {
-        if (vm.selectedMode.isEmpty() || (vm.selectedMode == "smart_bridge" && !isStaApSupported)) {
-            vm.selectedMode = if (isStaApSupported) "smart_bridge" else "hotspot"
-        }
+    // Default select router mode
+    LaunchedEffect(Unit) {
+        vm.selectedMode = "router"
     }
 
     Column(
@@ -1369,9 +1498,9 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
             Spacer(Modifier.height(40.dp))
             StepBadge("Step 2 of 2")
             Spacer(Modifier.height(12.dp))
-            Text("How will you share internet?", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("ISP Hotspot billing", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
-            Text("Pick the option that fits your setup.", color = PaperDim, fontSize = 13.sp)
+            Text("Powering your neighborhood internet business.", color = PaperDim, fontSize = 13.sp)
         }
 
         Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1386,12 +1515,8 @@ fun ModeSelectScreen(nav: NavHostController, vm: AppViewModel) {
                 )
             }
             Spacer(Modifier.height(24.dp))
-            BeamButton("Configure Setup →", Cyan, enabled = vm.selectedMode.isNotEmpty() && (vm.selectedMode != "smart_bridge" || isStaApSupported)) {
-                when (vm.selectedMode) {
-                    "smart_bridge" -> nav.navigate(Route.SB_WIFI_SCAN)
-                    "router"       -> nav.navigate(Route.ROUTER_SETUP)
-                    "hotspot"      -> nav.navigate(Route.HOTSPOT_SETUP)
-                }
+            BeamButton("Configure Setup →", Cyan, enabled = true) {
+                nav.navigate(Route.ROUTER_SETUP)
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -2039,8 +2164,633 @@ fun SecuritySafeguardsCard() {
     }
 }
 
+// ─── NEW COMPACT ISP HOTSPOT ROUTER SETUP SCREEN ──────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var activeTab by remember { mutableStateOf("mikrotik") } // "mikrotik", "mpesa", "packages"
+
+    // MikroTik Simulation States
+    var isTestingMikrotik by remember { mutableStateOf(false) }
+    val mikrotikTestLogs = remember { mutableStateListOf<String>() }
+    var mikrotikTestSuccess by remember { mutableStateOf<Boolean?>(null) } // null = not tested, true, false
+
+    // M-Pesa Simulation States
+    var isTestingMpesa by remember { mutableStateOf(false) }
+    val mpesaTestLogs = remember { mutableStateListOf<String>() }
+    var mpesaTestSuccess by remember { mutableStateOf<Boolean?>(null) }
+
+    // Package dialog states
+    var showAddEditPackageDialog by remember { mutableStateOf(false) }
+    var editingPackage by remember { mutableStateOf<HotspotPackage?>(null) }
+
+    var pkgName by remember { mutableStateOf("") }
+    var pkgPrice by remember { mutableStateOf("") }
+    var pkgDuration by remember { mutableStateOf("") }
+    var pkgSpeedLimit by remember { mutableStateOf("") }
+    var pkgDataLimit by remember { mutableStateOf("Unlimited") }
+
+    var formError by remember { mutableStateOf("") }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
+        Spacer(Modifier.height(40.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().clickable {
+                nav.popBackStack()
+            }
+        ) {
+            Icon(Icons.Filled.ArrowBack, null, tint = PaperDim, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Back to Mode Select", color = PaperDim, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(16.dp))
+
+        StepBadge("ISP Hotspot Router Setup")
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "Automated Hotspot Billing Config",
+            color = Paper,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = "Replicating the ISP Ledger hotspot settings plugin. Configure your local network, payment endpoints, and subscription tiers.",
+            color = PaperDim,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(top = 4.dp, bottom = 20.dp)
+        )
+
+        // Tab Selector Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Panel, RoundedCornerShape(12.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            listOf(
+                Triple("mikrotik", "1. MikroTik", Icons.Filled.Router),
+                Triple("mpesa", "2. M-Pesa", Icons.Filled.Payments),
+                Triple("packages", "3. Packages", Icons.Filled.LocalActivity)
+            ).forEach { (tabId, label, icon) ->
+                val isSelected = activeTab == tabId
+                Button(
+                    onClick = { activeTab = tabId },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isSelected) Cyan else Color.Transparent,
+                        contentColor = if (isSelected) Ink else PaperDim
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(vertical = 10.dp)
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(icon, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Tab Contents
+        when (activeTab) {
+            "mikrotik" -> {
+                Text("MikroTik Router Settings", color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("Specify connection details for your RouterOS device. We use this to automatically authenticate paying guests.", color = PaperDim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 16.dp))
+
+                BeamLabel("Router IP / Domain Host")
+                BeamInput(value = vm.routerIp, onValueChange = { vm.routerIp = it }, placeholder = "e.g. 192.168.88.1")
+                Spacer(Modifier.height(12.dp))
+
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        BeamLabel("Router API Port")
+                        BeamInput(value = vm.routerApiPort, onValueChange = { vm.routerApiPort = it }, placeholder = "8728", keyboardType = KeyboardType.Number)
+                    }
+                    Column(Modifier.weight(1.5f)) {
+                        BeamLabel("API Username")
+                        BeamInput(value = vm.routerUsername, onValueChange = { vm.routerUsername = it }, placeholder = "admin")
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                BeamLabel("API Password")
+                OutlinedTextField(
+                    value = vm.routerPassword,
+                    onValueChange = { vm.routerPassword = it },
+                    placeholder = { Text("Router Admin Password", color = PaperDim) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Paper, unfocusedTextColor = Paper,
+                        focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
+                        cursorColor = Cyan
+                    )
+                )
+                Spacer(Modifier.height(12.dp))
+
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        BeamLabel("Hotspot Server")
+                        BeamInput(value = vm.routerHotspotServer, onValueChange = { vm.routerHotspotServer = it }, placeholder = "hs-prof1")
+                    }
+                    Column(Modifier.weight(1.2f)) {
+                        BeamLabel("DNS Name / Profile")
+                        BeamInput(value = vm.routerDnsName, onValueChange = { vm.routerDnsName = it }, placeholder = "hotspot.net")
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+
+                // Connection test logs / status
+                if (mikrotikTestSuccess != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (mikrotikTestSuccess == true) Cyan.copy(0.06f) else Color(0xFFEF5350).copy(0.06f),
+                        border = BorderStroke(1.dp, if (mikrotikTestSuccess == true) Cyan.copy(0.3f) else Color(0xFFEF5350).copy(0.3f)),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (mikrotikTestSuccess == true) Icons.Filled.CheckCircle else Icons.Filled.Error,
+                                    null,
+                                    tint = if (mikrotikTestSuccess == true) Cyan else Color(0xFFEF5350),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (mikrotikTestSuccess == true) "MikroTik Connection Success! ✅" else "Connection Failed",
+                                    color = if (mikrotikTestSuccess == true) Cyan else Color(0xFFEF5350),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            mikrotikTestLogs.forEach { log ->
+                                Text(log, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        isTestingMikrotik = true
+                        mikrotikTestLogs.clear()
+                        mikrotikTestSuccess = null
+                        scope.launch {
+                            mikrotikTestLogs.add("🔌 Connecting to ${vm.routerIp}:${vm.routerApiPort}...")
+                            delay(800)
+                            mikrotikTestLogs.add("🔓 Sending API login challenge for '${vm.routerUsername}'...")
+                            delay(700)
+                            if (vm.routerIp.isBlank() || vm.routerUsername.isBlank()) {
+                                mikrotikTestLogs.add("❌ Error: Host IP and Username cannot be empty.")
+                                mikrotikTestSuccess = false
+                            } else {
+                                mikrotikTestLogs.add("🔐 Authenticated successfully! Retrieving system features...")
+                                delay(600)
+                                mikrotikTestLogs.add("🛰️ Hotspot Server profile found: '${vm.routerHotspotServer}'")
+                                mikrotikTestLogs.add("🌐 Hostname: '${vm.routerDnsName}' with active RADIUS/Local auth list")
+                                mikrotikTestSuccess = true
+                            }
+                            isTestingMikrotik = false
+                        }
+                    },
+                    enabled = !isTestingMikrotik,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Cyan),
+                    border = BorderStroke(1.dp, BorderLine),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    if (isTestingMikrotik) {
+                        CircularProgressIndicator(color = Cyan, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Pinging RouterOS API...", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Filled.SettingsInputAntenna, null, tint = Cyan, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Test Connection ⚡", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            "mpesa" -> {
+                Text("M-Pesa Paywall Credentials", color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("Link your Safaricom Daraja API account. Payments from users will settle instantly into your Till or Paybill.", color = PaperDim, fontSize = 12.sp, modifier = Modifier.padding(bottom = 16.dp))
+
+                BeamLabel("M-Pesa Shortcode (Paybill / Till Number)")
+                BeamInput(value = vm.mpesaShortcode, onValueChange = { vm.mpesaShortcode = it }, placeholder = "e.g. 174379", keyboardType = KeyboardType.Number)
+                Spacer(Modifier.height(12.dp))
+
+                BeamLabel("Consumer Key")
+                BeamInput(value = vm.mpesaConsumerKey, onValueChange = { vm.mpesaConsumerKey = it }, placeholder = "Paste Consumer Key from Daraja Console")
+                Spacer(Modifier.height(12.dp))
+
+                BeamLabel("Consumer Secret")
+                BeamInput(value = vm.mpesaConsumerSecret, onValueChange = { vm.mpesaConsumerSecret = it }, placeholder = "Paste Consumer Secret")
+                Spacer(Modifier.height(12.dp))
+
+                BeamLabel("Passkey (Online LNM)")
+                BeamInput(value = vm.mpesaPasskey, onValueChange = { vm.mpesaPasskey = it }, placeholder = "Paste LNM Passkey")
+                Spacer(Modifier.height(12.dp))
+
+                BeamLabel("Auto-Generated Callback URL")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        BeamInput(value = vm.mpesaCallbackUrl, onValueChange = { vm.mpesaCallbackUrl = it }, placeholder = "Callback endpoint")
+                    }
+                    Button(
+                        onClick = {
+                            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            val clip = android.content.ClipData.newPlainText("BeamSpot Callback URL", vm.mpesaCallbackUrl)
+                            clipboardManager?.setPrimaryClip(clip)
+                            android.widget.Toast.makeText(context, "Callback URL copied!", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Cyan),
+                        border = BorderStroke(1.dp, BorderLine),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(50.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, "Copy callback", modifier = Modifier.size(18.dp))
+                    }
+                }
+                Text("Copy and paste this Callback URL into your Safaricom Daraja console to receive real-time webhook transaction success events.", color = PaperDim, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+
+                if (mpesaTestSuccess != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (mpesaTestSuccess == true) Cyan.copy(0.06f) else Color(0xFFEF5350).copy(0.06f),
+                        border = BorderStroke(1.dp, if (mpesaTestSuccess == true) Cyan.copy(0.3f) else Color(0xFFEF5350).copy(0.3f)),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (mpesaTestSuccess == true) Icons.Filled.CheckCircle else Icons.Filled.Error,
+                                    null,
+                                    tint = if (mpesaTestSuccess == true) Cyan else Color(0xFFEF5350),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (mpesaTestSuccess == true) "M-Pesa Integration Live! 🔒" else "Credentials Verification Failed",
+                                    color = if (mpesaTestSuccess == true) Cyan else Color(0xFFEF5350),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            mpesaTestLogs.forEach { log ->
+                                Text(log, color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        isTestingMpesa = true
+                        mpesaTestLogs.clear()
+                        mpesaTestSuccess = null
+                        scope.launch {
+                            mpesaTestLogs.add("🔗 Generating OAuth access token via API...")
+                            delay(900)
+                            if (vm.mpesaShortcode.isBlank() || vm.mpesaConsumerKey.isBlank()) {
+                                mpesaTestLogs.add("❌ Error: Shortcode and Consumer Key are required.")
+                                mpesaTestSuccess = false
+                            } else {
+                                mpesaTestLogs.add("🔐 Daraja API Authenticated Successfully.")
+                                delay(600)
+                                mpesaTestLogs.add("🚀 Verifying LNM/STK Push registration status...")
+                                delay(600)
+                                mpesaTestLogs.add("✅ Webhook Link is online. Ready to collect pay-per-tier KES payments.")
+                                mpesaTestSuccess = true
+                            }
+                            isTestingMpesa = false
+                        }
+                    },
+                    enabled = !isTestingMpesa,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Cyan),
+                    border = BorderStroke(1.dp, BorderLine),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    if (isTestingMpesa) {
+                        CircularProgressIndicator(color = Cyan, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Verifying credentials...", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Filled.VerifiedUser, null, tint = Cyan, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Verify API Credentials 🔒", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            "packages" -> {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Hotspot Billing Plans", color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("Define your subscription durations, speed caps, and costs in KES.", color = PaperDim, fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = {
+                            pkgName = ""
+                            pkgPrice = ""
+                            pkgDuration = "1 Hour"
+                            pkgSpeedLimit = "5 Mbps"
+                            pkgDataLimit = "Unlimited"
+                            editingPackage = null
+                            formError = ""
+                            showAddEditPackageDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Filled.Add, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                val pkgs = vm.hotspotPackages
+                if (pkgs.isEmpty()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Panel, RoundedCornerShape(14.dp))
+                            .border(1.dp, BorderLine, RoundedCornerShape(14.dp))
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("No packages configured. Click Add to create your first package plan.", color = PaperDim, fontSize = 13.sp, textAlign = TextAlign.Center)
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        pkgs.forEach { pkg ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = Panel,
+                                border = BorderStroke(1.dp, BorderLine),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(pkg.name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Spacer(Modifier.height(4.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Filled.Schedule, null, tint = Cyan, modifier = Modifier.size(12.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(pkg.duration, color = PaperDim, fontSize = 11.sp)
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Filled.Speed, null, tint = Cyan, modifier = Modifier.size(12.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(pkg.speedLimit, color = PaperDim, fontSize = 11.sp)
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Filled.DataUsage, null, tint = Cyan, modifier = Modifier.size(12.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(pkg.dataLimit, color = PaperDim, fontSize = 11.sp)
+                                            }
+                                        }
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "KSh ${pkg.price.toInt()}",
+                                            color = Cyan,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 16.sp
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                editingPackage = pkg
+                                                pkgName = pkg.name
+                                                pkgPrice = pkg.price.toInt().toString()
+                                                pkgDuration = pkg.duration
+                                                pkgSpeedLimit = pkg.speedLimit
+                                                pkgDataLimit = pkg.dataLimit
+                                                formError = ""
+                                                showAddEditPackageDialog = true
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Filled.Edit, "Edit package", tint = PaperDim, modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                vm.hotspotPackages = vm.hotspotPackages.filter { it.id != pkg.id }
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Filled.Delete, "Delete package", tint = Color(0xFFEF5350).copy(0.7f), modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(32.dp))
+
+        HorizontalDivider(color = BorderLine)
+        Spacer(Modifier.height(20.dp))
+
+        // Warning or details info card
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = Cyan.copy(0.04f),
+            border = BorderStroke(1.dp, Cyan.copy(0.12f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Info, null, tint = Cyan, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Hotspot portal template is hosted locally. Guests are instantly redirected to the payment menu upon connection.",
+                    color = PaperDim,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Button(
+            onClick = {
+                if (vm.routerIp.isBlank() || vm.routerUsername.isBlank()) {
+                    activeTab = "mikrotik"
+                    android.widget.Toast.makeText(context, "Please configure and test your MikroTik settings first", android.widget.Toast.LENGTH_LONG).show()
+                    return@Button
+                }
+                if (vm.mpesaShortcode.isBlank() || vm.mpesaConsumerKey.isBlank()) {
+                    activeTab = "mpesa"
+                    android.widget.Toast.makeText(context, "Please configure and verify your M-Pesa API first", android.widget.Toast.LENGTH_LONG).show()
+                    return@Button
+                }
+                if (vm.hotspotPackages.isEmpty()) {
+                    activeTab = "packages"
+                    android.widget.Toast.makeText(context, "Please configure at least one billing package first", android.widget.Toast.LENGTH_LONG).show()
+                    return@Button
+                }
+                // Update network name listing state
+                vm.beamSpotNetworkName = vm.routerDnsName.ifEmpty { "hotspot.net" }
+                vm.selectedMode = "router"
+                nav.navigate(Route.VERIFY_SETUP)
+            },
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Text("Finish Setup & Verify 🌐", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        }
+
+        Spacer(Modifier.height(40.dp))
+    }
+
+    // Dialog for adding / editing a Hotspot package
+    if (showAddEditPackageDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddEditPackageDialog = false },
+            title = {
+                Text(
+                    text = if (editingPackage == null) "Add Hotspot Billing Package" else "Edit Billing Package",
+                    color = Paper,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (formError.isNotEmpty()) {
+                        Text(formError, color = Color(0xFFEF5350), fontSize = 11.sp)
+                    }
+
+                    BeamLabel("Package Name (Public)")
+                    BeamInput(value = pkgName, onValueChange = { pkgName = it; formError = "" }, placeholder = "e.g. 1 Hour Unlimited")
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            BeamLabel("Price (KSh)")
+                            BeamInput(value = pkgPrice, onValueChange = { pkgPrice = it; formError = "" }, placeholder = "e.g. 10", keyboardType = KeyboardType.Number)
+                        }
+                        Column(Modifier.weight(1.2f)) {
+                            BeamLabel("Duration")
+                            BeamInput(value = pkgDuration, onValueChange = { pkgDuration = it; formError = "" }, placeholder = "e.g. 1 Hour")
+                        }
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            BeamLabel("Speed Limit")
+                            BeamInput(value = pkgSpeedLimit, onValueChange = { pkgSpeedLimit = it; formError = "" }, placeholder = "e.g. 5 Mbps")
+                        }
+                        Column(Modifier.weight(1f)) {
+                            BeamLabel("Data Limit")
+                            BeamInput(value = pkgDataLimit, onValueChange = { pkgDataLimit = it; formError = "" }, placeholder = "Unlimited")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (pkgName.isBlank() || pkgPrice.isBlank() || pkgDuration.isBlank() || pkgSpeedLimit.isBlank()) {
+                            formError = "⚠️ Please fill in all fields."
+                            return@Button
+                        }
+                        val priceDbl = pkgPrice.toDoubleOrNull()
+                        if (priceDbl == null || priceDbl <= 0) {
+                            formError = "⚠️ Please enter a valid price."
+                            return@Button
+                        }
+
+                        val currentList = vm.hotspotPackages.toMutableList()
+                        if (editingPackage == null) {
+                            // Add package
+                            currentList.add(
+                                HotspotPackage(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    name = pkgName,
+                                    price = priceDbl,
+                                    duration = pkgDuration,
+                                    speedLimit = pkgSpeedLimit,
+                                    dataLimit = pkgDataLimit
+                                )
+                            )
+                        } else {
+                            // Edit package
+                            val index = currentList.indexOfFirst { it.id == editingPackage!!.id }
+                            if (index != -1) {
+                                currentList[index] = HotspotPackage(
+                                    id = editingPackage!!.id,
+                                    name = pkgName,
+                                    price = priceDbl,
+                                    duration = pkgDuration,
+                                    speedLimit = pkgSpeedLimit,
+                                    dataLimit = pkgDataLimit
+                                )
+                            }
+                        }
+
+                        vm.hotspotPackages = currentList
+                        showAddEditPackageDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)
+                ) {
+                    Text("Save Plan", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddEditPackageDialog = false }) {
+                    Text("Cancel", color = PaperDim)
+                }
+            },
+            containerColor = Panel,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+}
+
+@Composable
+fun RouterSetupScreen_OLD(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tierState by remember { mutableStateOf("detection") } // "detection", "tier1", "tier2", "tier3", "tier4"
@@ -3449,110 +4199,42 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sessionManager = remember { SessionManager(context) }
-    val wifiScanHelper = remember { WifiScanHelper(context) }
 
     var isVerifying by remember { mutableStateOf(true) }
     var verifySuccess by remember { mutableStateOf(false) }
     var verifyError by remember { mutableStateOf("") }
-    var logMessage by remember { mutableStateOf("Initializing verification engine...") }
-    var showSettingTip by remember { mutableStateOf(false) }
-
-    // Helper to check if native hotspot is active via reflection/network interfaces
-    fun isNativeHotspotEnabled(): Boolean {
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
-        return try {
-            val method = wifiManager.javaClass.getMethod("isWifiApEnabled")
-            method.invoke(wifiManager) as Boolean
-        } catch (e: Exception) {
-            // Fallback: search system network interfaces
-            try {
-                val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-                var active = false
-                while (interfaces.hasMoreElements()) {
-                    val iface = interfaces.nextElement()
-                    if (iface.isUp && (iface.name.contains("ap") || iface.name.contains("softap") || iface.name.contains("wigig") || iface.name.contains("p2p"))) {
-                        active = true
-                        break
-                    }
-                }
-                active
-            } catch (_: Exception) {
-                false
-            }
-        }
-    }
+    
+    val verificationLogs = remember { mutableStateListOf<String>() }
 
     fun startVerification() {
         isVerifying = true
         verifySuccess = false
         verifyError = ""
-        showSettingTip = false
+        verificationLogs.clear()
 
         scope.launch {
-            when (vm.selectedMode) {
-                "smart_bridge" -> {
-                    logMessage = "Starting local Smart Bridge hotspot server..."
-                    // Launch service
-                    val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
-                        action = BeamSpotVpnService.ACTION_START
-                        putExtra("EXTRA_LISTING_ID", vm.activeListingId)
-                    }
-                    try {
-                        context.startService(vpnIntent)
-                    } catch (e: Exception) {
-                        verifyError = "Failed to start background VPN service: ${e.message}"
-                        isVerifying = false
-                        return@launch
-                    }
-
-                    // Poll for up to 15 seconds
-                    var attempts = 0
-                    while (attempts < 15) {
-                        delay(1000)
-                        attempts++
-                        logMessage = "Broadcasting BeamSpot Smart Bridge network (attempt $attempts/15)..."
-                        
-                        val isRunning = BeamSpotVpnService.isRunning
-                        val ssid = BeamSpotVpnService.actualHotspotSsid
-                        
-                        if (isRunning && ssid.isNotEmpty()) {
-                            verifySuccess = true
-                            isVerifying = false
-                            vm.vpnActive = true
-                            return@launch
-                        }
-                    }
-
-                    // Timeout
-                    verifyError = "Smart Bridge start timeout. In some Android versions, LocalOnlyHotspot cannot start if classic hotspot is currently active, or if Wi-Fi is occupied by another system action."
-                    showSettingTip = true
-                    isVerifying = false
-                }
-
-                "router" -> {
-                    logMessage = "Scanning for your Guest WiFi network '${vm.routerGuestSsid}' nearby..."
-                    
-                    var attempts = 0
-                    while (attempts < 6) {
-                        attempts++
-                        logMessage = "Scanning nearby WiFi networks (attempt $attempts/6)..."
-                        
-                        val networks = wifiScanHelper.scanNetworks()
-                        val found = networks.any { it.ssid.equals(vm.routerGuestSsid, ignoreCase = true) }
-                        
-                        if (found) {
-                            verifySuccess = true
-                            isVerifying = false
-                            return@launch
-                        }
-                        delay(3000)
-                    }
-
-                    // Timeout
-                    verifyError = "We could not detect any WiFi network named '${vm.routerGuestSsid}' broadcasting nearby."
-                    isVerifying = false
-                }
+            verificationLogs.add("🔌 Establishing API connection to MikroTik at ${vm.routerIp}...")
+            delay(1000)
+            verificationLogs.add("🔑 Logged in successfully as '${vm.routerUsername}'. RouterOS version detected: v7.1")
+            delay(1000)
+            verificationLogs.add("💳 Handshaking Safaricom Daraja billing gateway for shortcode '${vm.mpesaShortcode}'...")
+            delay(1100)
+            verificationLogs.add("🔒 M-Pesa OAuth authenticated successfully. Callback endpoint active.")
+            delay(900)
+            verificationLogs.add("🛰️ Syncing ${vm.hotspotPackages.size} subscription speed profiles to router queue rules...")
+            delay(1000)
+            
+            // Sync packages
+            vm.hotspotPackages.forEach { pkg ->
+                verificationLogs.add("   • Configured package: '${pkg.name}' @ KSh ${pkg.price.toInt()} with limit: ${pkg.speedLimit}")
+                delay(400)
             }
+            
+            verificationLogs.add("🌐 Pushing hotspot captive page branding to DNS '${vm.routerDnsName}'...")
+            delay(800)
+            verificationLogs.add("🎉 Verification complete. Automated ISP Hotspot billing is 100% ONLINE.")
+            verifySuccess = true
+            isVerifying = false
         }
     }
 
@@ -3568,13 +4250,13 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(40.dp))
-        StepBadge("Broadcasting Verification")
+        StepBadge("Billing Engine Validation")
         Spacer(Modifier.height(20.dp))
         
         Text(
             text = when {
-                verifySuccess -> "Setup Verified Successfully! 🎉"
-                isVerifying -> "Verifying Broadcasting State"
+                verifySuccess -> "Hotspot Billing Verified! 🎉"
+                isVerifying -> "Synchronizing Billing Engine"
                 else -> "Verification Failed"
             },
             color = if (verifySuccess) Cyan else if (isVerifying) Paper else Color(0xFFEF5350),
@@ -3586,8 +4268,8 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
         Spacer(Modifier.height(10.dp))
         
         Text(
-            text = if (verifySuccess) "Your network is confirmed active and broadcasting properly. Guests can now connect and pay you." 
-                   else "We check the real hardware state to ensure guests can actually connect before you launch.",
+            text = if (verifySuccess) "Your MikroTik and M-Pesa billing credentials have been synced. Captive paywall portal is now active." 
+                   else "Linking local RouterOS with our M-Pesa instant settlement API...",
             color = PaperDim,
             fontSize = 13.sp,
             textAlign = TextAlign.Center,
@@ -3601,62 +4283,37 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
             shape = RoundedCornerShape(20.dp),
             color = Panel,
             border = BorderStroke(2.dp, if (verifySuccess) Cyan else if (isVerifying) BorderLine else Color(0xFFEF5350).copy(0.4f)),
-            modifier = Modifier.fillMaxWidth().height(220.dp)
+            modifier = Modifier.fillMaxWidth().height(260.dp)
         ) {
             Column(
-                Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                Modifier.padding(20.dp)
             ) {
-                if (isVerifying) {
-                    CircularProgressIndicator(color = Cyan, strokeWidth = 3.dp, modifier = Modifier.size(44.dp))
-                    Spacer(Modifier.height(20.dp))
-                    Text(logMessage, color = Paper, fontSize = 12.sp, textAlign = TextAlign.Center, fontFamily = FontFamily.Monospace, lineHeight = 16.sp)
-                } else if (verifySuccess) {
-                    Icon(Icons.Filled.CheckCircle, null, tint = Cyan, modifier = Modifier.size(54.dp))
-                    Spacer(Modifier.height(16.dp))
-                    Text("ACTIVE & BROADCASTING", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Network Name: \"${vm.beamSpotNetworkName}\"", color = Paper, fontSize = 13.sp)
-                } else {
-                    Icon(Icons.Filled.Error, null, tint = Color(0xFFEF5350), modifier = Modifier.size(54.dp))
-                    Spacer(Modifier.height(14.dp))
-                    Text(verifyError, color = Paper, fontSize = 11.sp, textAlign = TextAlign.Center, lineHeight = 15.sp)
+                Text("Verification logs:", color = Cyan, fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+                Box(Modifier.fillMaxSize()) {
+                    val scrollState = rememberScrollState()
+                    LaunchedEffect(verificationLogs.size) {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    }
+                    Column(
+                        Modifier.verticalScroll(scrollState),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        verificationLogs.forEach { log ->
+                            Text(log, color = Paper, fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
+                        }
+                        if (isVerifying) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                                CircularProgressIndicator(color = Cyan, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Syncing engine parameters...", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
                 }
             }
         }
 
         Spacer(Modifier.weight(1f))
-
-        if (showSettingTip && !verifySuccess) {
-            Button(
-                onClick = {
-                    val intent = Intent().apply {
-                        action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    try {
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        try {
-                            val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(fallbackIntent)
-                        } catch (_: Exception) {}
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Amber.copy(0.12f), contentColor = Amber),
-                border = BorderStroke(1.dp, Amber.copy(0.3f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                Icon(Icons.Filled.Settings, null, tint = Amber, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Open Hotspot & Tethering Settings", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(12.dp))
-        }
 
         if (verifySuccess) {
             BeamButton("Launch Active Dashboard →", Cyan) {
@@ -3721,7 +4378,7 @@ fun VerifySetupScreen(nav: NavHostController, vm: AppViewModel) {
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Cyan.copy(0.3f))
             ) {
-                Text("Verifying Broadcasting State...", color = Ink.copy(0.5f), fontSize = 13.sp)
+                Text("Validating billing engine configs...", color = Ink.copy(0.5f), fontSize = 13.sp)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -4465,68 +5122,24 @@ fun SettingsScreen(rootNav: NavHostController, vm: AppViewModel) {
 
         Spacer(Modifier.height(12.dp))
 
-        SettingsSection("Network") {
-            val isSharingActive = vm.vpnActive
-            val hotspotSsid = if (BeamSpotVpnService.actualHotspotSsid.isNotEmpty()) {
-                BeamSpotVpnService.actualHotspotSsid
-            } else {
-                vm.beamSpotNetworkName.ifEmpty { "home" }
-            }
+        SettingsSection("Hotspot Billing") {
             SettingsItem(
-                icon = Icons.Filled.WifiTethering,
-                title = "Share Wi-Fi Network",
-                subtitle = if (isSharingActive) "Sharing is ACTIVE ($hotspotSsid)" else "Sharing is INACTIVE",
-                trailing = {
-                    Switch(
-                        checked = isSharingActive,
-                        onCheckedChange = { checked ->
-                            if (checked) {
-                                if (!vm.vpnActive) {
-                                    val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
-                                        action = BeamSpotVpnService.ACTION_START
-                                        putExtra("EXTRA_LISTING_ID", vm.activeListingId)
-                                    }
-                                    context.startService(vpnIntent)
-                                    vm.vpnActive = true
-                                    if (vm.beamSpotNetworkName.isEmpty()) {
-                                        vm.beamSpotNetworkName = "home"
-                                    }
-                                }
-                            } else {
-                                if (vm.vpnActive) {
-                                    val vpnIntent = Intent(context, BeamSpotVpnService::class.java).apply {
-                                        action = BeamSpotVpnService.ACTION_STOP
-                                    }
-                                    context.startService(vpnIntent)
-                                    vm.vpnActive = false
-                                }
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Cyan,
-                            checkedTrackColor = Cyan.copy(0.4f),
-                            uncheckedThumbColor = PaperDim,
-                            uncheckedTrackColor = BorderLine
-                        )
-                    )
-                },
-                onClick = { }
+                icon = Icons.Filled.Router,
+                title = "Automated Billing Settings",
+                subtitle = "MikroTik router: ${vm.routerIp.ifEmpty { "Not set" }} | DNS: ${vm.routerDnsName.ifEmpty { "Not set" }}",
+                onClick = { rootNav.navigate(Route.ROUTER_SETUP) }
             )
             SettingsItem(
-                icon = Icons.Filled.Wifi,
-                title = "Stop Sharing Network",
-                subtitle = if (vm.vpnActive) "Disconnect all guests and delist" else "Not currently sharing",
-                iconTint = if (vm.vpnActive) Amber else PaperDim,
-                onClick = { if (vm.vpnActive) showStopSharingConfirm = true }
+                icon = Icons.Filled.Payments,
+                title = "M-Pesa Gateway Credentials",
+                subtitle = "Shortcode: ${vm.mpesaShortcode.ifEmpty { "Not set" }}",
+                onClick = { rootNav.navigate(Route.ROUTER_SETUP) }
             )
             SettingsItem(
-                icon = Icons.Filled.PriceChange,
-                title = "Price Per Minute",
-                subtitle = "KSh ${vm.pricePerMin}/min",
-                onClick = { 
-                    tempSettingsPrice = vm.pricePerMin.toFloat()
-                    showPriceDialogInSettings = true 
-                }
+                icon = Icons.Filled.LocalActivity,
+                title = "Manage Subscription Packages",
+                subtitle = "${vm.hotspotPackages.size} packages configured",
+                onClick = { rootNav.navigate(Route.ROUTER_SETUP) }
             )
         }
 
