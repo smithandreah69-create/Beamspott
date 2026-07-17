@@ -2427,6 +2427,33 @@ class RouterOsApiClient(
 }
 
 // ─── 5-STEP ROUTER SETUP WIZARD SCREEN ─────────────────────────────────────
+data class RouterDefault(val username: String, val password: String)
+
+private val routerBrands = listOf(
+    "MikroTik",
+    "TP-Link",
+    "Huawei",
+    "Tenda",
+    "D-Link",
+    "Netgear",
+    "ASUS",
+    "Cisco / Linksys",
+    "ZTE",
+    "Other / Not Sure"
+)
+
+private val routerDefaults: Map<String, List<RouterDefault>> = mapOf(
+    "MikroTik" to listOf(RouterDefault("admin", "")),
+    "TP-Link" to listOf(RouterDefault("admin", "admin"), RouterDefault("admin", "")),
+    "Huawei" to listOf(RouterDefault("admin", "admin"), RouterDefault("telecomadmin", "admintelecom"), RouterDefault("root", "admin")),
+    "Tenda" to listOf(RouterDefault("admin", "admin"), RouterDefault("admin", "")),
+    "D-Link" to listOf(RouterDefault("admin", ""), RouterDefault("admin", "admin"), RouterDefault("admin", "password")),
+    "Netgear" to listOf(RouterDefault("admin", "password"), RouterDefault("admin", "1234")),
+    "ASUS" to listOf(RouterDefault("admin", "admin")),
+    "Cisco / Linksys" to listOf(RouterDefault("admin", "admin"), RouterDefault("admin", "password")),
+    "ZTE" to listOf(RouterDefault("admin", "admin"), RouterDefault("admin", ""))
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
@@ -2439,11 +2466,49 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     val logs = remember { mutableStateListOf<String>() }
     
     // Step 1: Connect variables
-    var ip by remember { mutableStateOf(vm.routerIp.ifEmpty { "192.168.88.1" }) }
+    var ip by remember { mutableStateOf(vm.routerIp.ifEmpty { "" }) }
     var port by remember { mutableStateOf(vm.routerApiPort.ifEmpty { "8728" }) }
     var username by remember { mutableStateOf(vm.routerUsername.ifEmpty { "admin" }) }
-    var password by remember { mutableStateOf(vm.routerPassword) }
+    var password by remember { mutableStateOf("") }
     var isConnecting by remember { mutableStateOf(false) }
+    var selectedBrand by remember { mutableStateOf("MikroTik") }
+    var showBrandDialog by remember { mutableStateOf(false) }
+    var brandAuthErrorMessage by remember { mutableStateOf("") }
+    var triedDefaults by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val activeNetwork = connectivityManager?.activeNetwork
+            val linkProperties = connectivityManager?.getLinkProperties(activeNetwork)
+            val gatewayFromRoutes = linkProperties?.routes
+                ?.firstOrNull { it.isDefaultRoute && it.gateway != null }
+                ?.gateway?.hostAddress
+            
+            if (!gatewayFromRoutes.isNullOrEmpty() && gatewayFromRoutes != "0.0.0.0") {
+                ip = gatewayFromRoutes
+            } else {
+                val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                val dhcpInfo = wifiManager?.dhcpInfo
+                val gatewayIpInt = dhcpInfo?.gateway ?: 0
+                if (gatewayIpInt != 0) {
+                    val gatewayIpStr = String.format(
+                        java.util.Locale.US,
+                        "%d.%d.%d.%d",
+                        gatewayIpInt and 0xFF,
+                        (gatewayIpInt shr 8) and 0xFF,
+                        (gatewayIpInt shr 16) and 0xFF,
+                        (gatewayIpInt shr 24) and 0xFF
+                    )
+                    if (gatewayIpStr != "0.0.0.0") {
+                        ip = gatewayIpStr
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("RouterSetup", "Error retrieving gateway IP", e)
+        }
+    }
     
     // Step 2: WAN check variables
     var isCheckingWan by remember { mutableStateOf(false) }
@@ -2606,7 +2671,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                         1 -> {
                             Text("Connect to Your Router", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
                             Text(
-                                "Link BeamSpot directly with your MikroTik RouterOS API to automate captive-portal billing.",
+                                "Link BeamSpot directly with your Router's API to automate captive-portal billing.",
                                 color = PaperDim,
                                 fontSize = 13.sp
                             )
@@ -2627,16 +2692,119 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                     )
                                 }
                             }
+
+                            // Router Brand Dropdown Selector
+                            BeamLabel("Router Brand")
+                            OutlinedCard(
+                                onClick = { showBrandDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.outlinedCardColors(containerColor = Color.Transparent),
+                                border = BorderStroke(1.dp, BorderLine)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("What router do you use?", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(selectedBrand, color = Paper, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Icon(Icons.Filled.ArrowDropDown, contentDescription = "Dropdown", tint = Cyan)
+                                }
+                            }
+
+                            if (showBrandDialog) {
+                                androidx.compose.ui.window.Dialog(onDismissRequest = { showBrandDialog = false }) {
+                                    Card(
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Panel),
+                                        border = BorderStroke(1.dp, BorderLine),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .padding(20.dp)
+                                                .fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Text("Select Router Brand", color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                            
+                                            LazyColumn(
+                                                modifier = Modifier.heightIn(max = 300.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                items(routerBrands) { brand ->
+                                                    Surface(
+                                                        onClick = {
+                                                            selectedBrand = brand
+                                                            showBrandDialog = false
+                                                            if (brand != "Other / Not Sure") {
+                                                                val firstDefault = routerDefaults[brand]?.firstOrNull()
+                                                                if (firstDefault != null) {
+                                                                    username = firstDefault.username
+                                                                    password = firstDefault.password
+                                                                }
+                                                            } else {
+                                                                username = ""
+                                                                password = ""
+                                                            }
+                                                            brandAuthErrorMessage = ""
+                                                            triedDefaults = false
+                                                        },
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = if (selectedBrand == brand) Cyan.copy(0.12f) else Color.Transparent,
+                                                        border = BorderStroke(1.dp, if (selectedBrand == brand) Cyan else Color.Transparent),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(12.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                brand,
+                                                                color = if (selectedBrand == brand) Cyan else Paper,
+                                                                fontSize = 14.sp,
+                                                                fontWeight = if (selectedBrand == brand) FontWeight.Bold else FontWeight.Normal,
+                                                                modifier = Modifier.weight(1f)
+                                                            )
+                                                            if (selectedBrand == brand) {
+                                                                Icon(Icons.Filled.Check, contentDescription = "Selected", tint = Cyan, modifier = Modifier.size(18.dp))
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             
                             BeamLabel("Router IP / Domain Host")
                             BeamInput(value = ip, onValueChange = { ip = it }, placeholder = "e.g. 192.168.88.1")
+                            if (ip.isBlank()) {
+                                Text(
+                                    text = "Could not auto-detect gateway. Please check your router's sticker or your WiFi settings' 'Gateway' field and enter it manually.",
+                                    color = Amber,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(start = 4.dp)
+                                )
+                            }
                             
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Column(modifier = Modifier.weight(1f)) {
+                                Column(modifier = Modifier.weight(1.5f)) {
                                     BeamLabel("API Port")
                                     BeamInput(value = port, onValueChange = { port = it }, placeholder = "8728", keyboardType = KeyboardType.Number)
                                 }
-                                Column(modifier = Modifier.weight(1.5f)) {
+                                Column(modifier = Modifier.weight(2f)) {
                                     BeamLabel("Admin Username")
                                     BeamInput(value = username, onValueChange = { username = it }, placeholder = "admin")
                                 }
@@ -2649,6 +2817,37 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 placeholder = "Password (leave blank if none)",
                                 isPassword = true
                             )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "Check the sticker on your router for the default password, or enter what you've set it to.",
+                                color = PaperDim,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(start = 4.dp)
+                            )
+
+                            if (brandAuthErrorMessage.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                Surface(
+                                    color = Amber.copy(0.12f),
+                                    border = BorderStroke(1.dp, Amber.copy(0.4f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Warning, contentDescription = "Warning", tint = Amber, modifier = Modifier.size(18.dp))
+                                        Text(
+                                            text = brandAuthErrorMessage,
+                                            color = Paper,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
                             
                             Spacer(Modifier.weight(1f))
                             
@@ -2658,37 +2857,116 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 enabled = !isConnecting && ip.isNotBlank() && port.isNotBlank() && username.isNotBlank()
                             ) {
                                 isConnecting = true
-                                logs.add("Initiating login check to $ip:$port with user '$username'...")
+                                brandAuthErrorMessage = ""
+                                logs.add("Initiating connection check to $ip:$port...")
+                                
+                                val defaultsToTry = if (selectedBrand != "Other / Not Sure" && !triedDefaults && password.isEmpty()) {
+                                    routerDefaults[selectedBrand] ?: emptyList()
+                                } else {
+                                    emptyList()
+                                }
+                                
                                 scope.launch {
                                     delay(1000)
                                     if (vm.isDemoMode) {
-                                        vm.routerIp = ip
-                                        vm.routerApiPort = port
-                                        vm.routerUsername = username
-                                        vm.routerPassword = password
-                                        logs.add("✅ Demo Mode: Connection established!")
-                                        logs.add("Detected RouterOS v7.12 on MikroTik hAP ac2")
-                                        currentStep = 2
-                                    } else {
-                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                            if (client.connect()) {
-                                                val loginResult = client.login(username, password)
-                                                client.disconnect()
-                                                loginResult
-                                            } else {
-                                                Pair(false, "Could not open API socket connection to $ip:$port. Ensure API service is enabled under IP -> Services in WinBox.")
+                                        if (defaultsToTry.isNotEmpty()) {
+                                            var demoSucceeded = false
+                                            for ((index, default) in defaultsToTry.withIndex()) {
+                                                logs.add("[$selectedBrand auto-detect] Trying credentials: user='${default.username}', password='${"*".repeat(default.password.length)}' [Attempt ${index + 1}/${defaultsToTry.size}]...")
+                                                delay(500)
+                                                // Simulating hAP ac2 behavior on first default for MikroTik
+                                                if (selectedBrand == "MikroTik") {
+                                                    username = default.username
+                                                    password = default.password
+                                                    vm.routerUsername = default.username
+                                                    vm.routerPassword = default.password
+                                                    vm.routerIp = ip
+                                                    vm.routerApiPort = port
+                                                    logs.add("✅ Demo Mode: Connection established!")
+                                                    logs.add("Detected RouterOS v7.12 on MikroTik hAP ac2")
+                                                    currentStep = 2
+                                                    demoSucceeded = true
+                                                    break
+                                                } else {
+                                                    logs.add("❌ Authentication failed (Demo Mode simulation of incorrect credentials)")
+                                                }
                                             }
-                                        }
-                                        logs.add(result.second)
-                                        if (result.first) {
+                                            if (!demoSucceeded) {
+                                                triedDefaults = true
+                                                brandAuthErrorMessage = "None of the common defaults for $selectedBrand worked — you may have changed your admin password. Please check your router's label or enter it manually below."
+                                                logs.add("❌ All defaults failed. Please enter your credentials manually.")
+                                            }
+                                        } else {
                                             vm.routerIp = ip
                                             vm.routerApiPort = port
                                             vm.routerUsername = username
                                             vm.routerPassword = password
-                                            logs.add("✅ Connection verified! Advancing.")
+                                            logs.add("✅ Demo Mode: Connection established!")
                                             currentStep = 2
+                                        }
+                                    } else {
+                                        if (defaultsToTry.isNotEmpty()) {
+                                            var success = false
+                                            for ((index, default) in defaultsToTry.withIndex()) {
+                                                logs.add("[$selectedBrand auto-detect] Trying credentials: user='${default.username}', password='${"*".repeat(default.password.length)}' [Attempt ${index + 1}/${defaultsToTry.size}]...")
+                                                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                    try {
+                                                        if (client.connect()) {
+                                                            val loginResult = client.login(default.username, default.password)
+                                                            client.disconnect()
+                                                            loginResult
+                                                        } else {
+                                                            Pair(false, "Could not open API socket connection to $ip:$port. Ensure API service is enabled under IP -> Services.")
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Pair(false, "Connection error: ${e.localizedMessage}")
+                                                    }
+                                                }
+                                                logs.add(result.second)
+                                                if (result.first) {
+                                                    username = default.username
+                                                    password = default.password
+                                                    vm.routerUsername = default.username
+                                                    vm.routerPassword = default.password
+                                                    vm.routerIp = ip
+                                                    vm.routerApiPort = port
+                                                    logs.add("✅ Connection verified using defaults! Advancing.")
+                                                    currentStep = 2
+                                                    success = true
+                                                    break
+                                                }
+                                            }
+                                            if (!success) {
+                                                triedDefaults = true
+                                                brandAuthErrorMessage = "None of the common defaults for $selectedBrand worked — you may have changed your admin password. Please check your router's label or enter it manually below."
+                                                logs.add("❌ Connection test failed using default credentials. Please type your password manually.")
+                                            }
                                         } else {
-                                            logs.add("❌ Connection test failed. Please verify credentials and network link.")
+                                            // Manual check or other
+                                            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                try {
+                                                    if (client.connect()) {
+                                                        val loginResult = client.login(username, password)
+                                                        client.disconnect()
+                                                        loginResult
+                                                    } else {
+                                                        Pair(false, "Could not open API socket connection to $ip:$port. Ensure API service is enabled under IP -> Services in WinBox.")
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Pair(false, "Connection error: ${e.localizedMessage}")
+                                                }
+                                            }
+                                            logs.add(result.second)
+                                            if (result.first) {
+                                                vm.routerIp = ip
+                                                vm.routerApiPort = port
+                                                vm.routerUsername = username
+                                                vm.routerPassword = password
+                                                logs.add("✅ Connection verified! Advancing.")
+                                                currentStep = 2
+                                            } else {
+                                                logs.add("❌ Connection test failed. Please verify credentials and network link.")
+                                            }
                                         }
                                     }
                                     isConnecting = false
