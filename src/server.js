@@ -124,9 +124,7 @@ app.get('/api/hosts/payout', requireAuth, async (req, res) => {
 });
 
 function getMaxGuests(connectionType) {
-    if (connectionType === 'SMART_BRIDGE') return 30;
-    if (connectionType === 'MOBILE_HOTSPOT') return 30;
-    return 30; // HOME_ROUTER / fallback
+    return 30; // ROUTER mode
 }
 
 // Create / update a listing (host registering their network)

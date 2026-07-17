@@ -223,42 +223,11 @@ class BeamSpotVpnService : VpnService() {
     }
 
     private fun startHotspot() {
-        // The app does not create or configure the hotspot — Android does not allow
-        // regular apps to do this. The host turns on their own hotspot in system
-        // Settings (guided by the UI in Part 2). This function only confirms it's on.
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        val isOn = try {
-            val method = wifiManager?.javaClass?.getMethod("isWifiApEnabled")
-            method?.invoke(wifiManager) as? Boolean ?: false
-        } catch (e: Exception) {
-            false
-        }
-        if (!isOn) {
-            android.util.Log.e("BeamSpotVpnService", "startHotspot called but native hotspot is not actually on — stopping VPN.")
-            stopVpn()
-            return
-        }
-        isStaApSupported = true
-        // Read back whatever the host actually configured, so the Dashboard shows the real name —
-        // this value must come from what VerifySetupScreen/HotspotSetupScreen stored after the user
-        // confirmed it themselves, not from anything the app tried to set.
-        val prefs = getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
-        actualHotspotSsid = prefs.getString("beam_spot_network_name", "") ?: ""
-        actualHotspotPassword = prefs.getString("beam_spot_network_password", "") ?: ""
+        // Obsolete in Router Mode
     }
 
     private fun stopHotspot() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                hotspotReservation?.close()
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("BeamSpotVpnService", "Exception closing LocalOnlyHotspot reservation", e)
-        } finally {
-            hotspotReservation = null
-            actualHotspotSsid = ""
-            actualHotspotPassword = ""
-        }
+        // Obsolete in Router Mode
     }
 
     private fun trackClientIpActivity(ip: String) {

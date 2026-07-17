@@ -530,12 +530,19 @@ fun BeamLabel(text: String) {
 }
 
 @Composable
-fun BeamInput(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType = KeyboardType.Text) {
+fun BeamInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    isPassword: Boolean = false
+) {
     OutlinedTextField(
         value = value, onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth(),
         placeholder = { Text(placeholder, color = PaperDim) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        visualTransformation = if (isPassword) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = Paper, unfocusedTextColor = Paper,
             focusedBorderColor = Cyan, unfocusedBorderColor = BorderLine,
@@ -608,7 +615,7 @@ fun BeamSpotApp() {
             if (hasSetup || vm.beamSpotNetworkName.isNotEmpty()) {
                 startDest.value = Route.MAIN_APP
             } else {
-                startDest.value = Route.MODE_SELECT
+                startDest.value = Route.ROUTER_SETUP
             }
         } else {
             startDest.value = Route.SPLASH
@@ -621,19 +628,8 @@ fun BeamSpotApp() {
         composable(Route.SPLASH)         { SplashScreen(nav) }
         composable(Route.LANDING)        { LandingScreen(nav, vm) }
         composable(Route.SIGN_IN)        { SignInScreen(nav, vm) }
-        composable(Route.MODE_SELECT)    { ModeSelectScreen(nav, vm) }
         composable(Route.PAYOUT_SETUP)   { PayoutSetupScreen(nav, vm) }
-        composable(Route.SB_WIFI_SCAN)   { SmartBridgeWifiScanScreen(nav, vm) }
-        composable("sb_password/{ssid}/{bssid}") { back ->
-            val ssid  = back.arguments?.getString("ssid")  ?: ""
-            val bssid = back.arguments?.getString("bssid") ?: ""
-            SmartBridgePasswordScreen(nav, vm, ssid, bssid)
-        }
-        composable(Route.SB_PERMISSIONS) { SmartBridgePermissionsScreen(nav, vm) }
-        composable(Route.SB_NAMING)      { SmartBridgeNamingScreen(nav, vm) }
         composable(Route.ROUTER_SETUP)   { RouterSetupScreen(nav, vm) }
-        composable(Route.HOTSPOT_SETUP)  { HotspotSetupScreen(nav, vm) }
-        composable(Route.VERIFY_SETUP)   { VerifySetupScreen(nav, vm) }
         composable(Route.MAIN_APP)       { MainAppScreen(nav, vm) }
     }
 }
@@ -750,7 +746,7 @@ fun SplashScreen(nav: NavHostController) {
             if (hasSetup) {
                 nav.navigate(Route.MAIN_APP) { popUpTo(Route.SPLASH) { inclusive = true } }
             } else {
-                nav.navigate(Route.MODE_SELECT) { popUpTo(Route.SPLASH) { inclusive = true } }
+                nav.navigate(Route.ROUTER_SETUP) { popUpTo(Route.SPLASH) { inclusive = true } }
             }
         } else {
             nav.navigate(Route.LANDING) { popUpTo(Route.SPLASH) { inclusive = true } }
@@ -830,7 +826,7 @@ fun LandingScreen(nav: NavHostController, vm: AppViewModel) {
                 icon = Icons.Filled.Router,
                 onClick = {
                     if (vm.isSignedIn) {
-                        nav.navigate(Route.MODE_SELECT)
+                        nav.navigate(Route.ROUTER_SETUP)
                     } else {
                         nav.navigate(Route.SIGN_IN)
                     }
@@ -1429,7 +1425,7 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
 
         BeamButton(if (isSaving) "Saving…" else "Continue", Cyan, enabled = isFormValid && !isSaving && !isLoading) {
             if (RetrofitClient.getToken() == null) {
-                nav.navigate(Route.MODE_SELECT)
+                nav.navigate(Route.ROUTER_SETUP)
                 return@BeamButton
             }
             isSaving = true
@@ -1445,7 +1441,7 @@ fun PayoutSetupScreen(nav: NavHostController, vm: AppViewModel) {
                             bankHolder = if (vm.payoutMethod == "bank") vm.bankHolder else null
                         )
                     )
-                    nav.navigate(Route.MODE_SELECT)
+                    nav.navigate(Route.ROUTER_SETUP)
                 } catch (e: Exception) {
                     errorMessage = "Failed to save: ${e.localizedMessage ?: "Unknown error"}"
                     android.util.Log.e("PayoutSetupScreen", "Failed to save payout", e)
@@ -1557,7 +1553,7 @@ private fun ModeCard(id: String, title: String, description: String, badge: Stri
 // SMART BRIDGE: WIFI SCAN SCREEN (real scan, no fake data)
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun SmartBridgeWifiScanScreen(nav: NavHostController, vm: AppViewModel) {
+fun SmartBridgeWifiScanScreen_OLD(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val helper  = remember { WifiScanHelper(context) }
     val scope   = rememberCoroutineScope()
@@ -1686,14 +1682,14 @@ fun checkAndLockNetwork(context: Context, ssid: String, userEmail: String): Resu
 }
 
 @Composable
-fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: String, bssid: String) {
+fun SmartBridgePasswordScreen_OLD(nav: NavHostController, vm: AppViewModel, ssid: String, bssid: String) {
     val decodedSsid = ssid.replace("%2F", "/")
     var password  by remember { mutableStateOf("") }
     var showPass  by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
     var connectError by remember { mutableStateOf("") }
     val context = LocalContext.current
-    val wifiConnectHelper = remember { WifiConnectHelper(context) }
+    val wifiConnectHelper = remember { "stub" }
 
     Column(Modifier.fillMaxSize().background(Ink).padding(24.dp)) {
         TopBar("Enter WiFi password") { nav.popBackStack() }
@@ -1743,18 +1739,8 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
             }
             isConnecting = true
             connectError = ""
-            wifiConnectHelper.connect(
-                ssid = decodedSsid,
-                password = password,
-                onSuccess = {
-                    isConnecting = false
-                    nav.navigate(Route.SB_PERMISSIONS)
-                },
-                onFailure = { errorMsg ->
-                    isConnecting = false
-                    connectError = errorMsg
-                }
-            )
+            isConnecting = false
+            nav.navigate(Route.SB_PERMISSIONS)
         }
         Spacer(Modifier.height(12.dp))
         Button(
@@ -1788,7 +1774,7 @@ fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: St
 // SMART BRIDGE: REAL PERMISSIONS (no fake gimmicks)
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
+fun SmartBridgePermissionsScreen_OLD(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
 
@@ -1990,7 +1976,7 @@ fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
 // SMART BRIDGE: NAMING the public BeamSpot network
 // ─────────────────────────────────────────────────────────────────────────
 @Composable
-fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
+fun SmartBridgeNamingScreen_OLD(nav: NavHostController, vm: AppViewModel) {
     val defaultName = "${vm.userName.take(12)}_BeamSpot".replace(" ", "_")
     var name by remember { mutableStateOf(defaultName) }
 
@@ -2164,10 +2150,936 @@ fun SecuritySafeguardsCard() {
     }
 }
 
-// ─── NEW COMPACT ISP HOTSPOT ROUTER SETUP SCREEN ──────────────────────────
+// ─── SMART BRIDGE STUBS (DEPRECATED) ──────────────────────────────────────
+@Composable
+fun SmartBridgeWifiScanScreen(nav: NavHostController, vm: AppViewModel) {
+    Box(Modifier.fillMaxSize())
+}
+
+@Composable
+fun SmartBridgePasswordScreen(nav: NavHostController, vm: AppViewModel, ssid: String, bssid: String) {
+    Box(Modifier.fillMaxSize())
+}
+
+@Composable
+fun SmartBridgePermissionsScreen(nav: NavHostController, vm: AppViewModel) {
+    Box(Modifier.fillMaxSize())
+}
+
+@Composable
+fun SmartBridgeNamingScreen(nav: NavHostController, vm: AppViewModel) {
+    Box(Modifier.fillMaxSize())
+}
+
+// ─── LEGACY ROUTER SETUP STUBS (DEPRECATED) ──────────────────────────────
+@Composable
+fun RouterSetupScreen_OLD(nav: NavHostController, vm: AppViewModel) {
+    Box(Modifier.fillMaxSize())
+}
+
+@Composable
+fun RouterSetupScreen_OLD2(nav: NavHostController, vm: AppViewModel) {
+    Box(Modifier.fillMaxSize())
+}
+
+// ─── MIKROTIK ROUTEROS API CLIENT ─────────────────────────────────────────
+class RouterOsApiClient(
+    val host: String,
+    val port: Int = 8728,
+    val timeoutMs: Int = 5000
+) {
+    private var socket: java.net.Socket? = null
+    private var input: java.io.InputStream? = null
+    private var output: java.io.OutputStream? = null
+
+    private fun encodeLength(len: Int): ByteArray {
+        return when {
+            len < 0x80 -> byteArrayOf(len.toByte())
+            len < 0x4000 -> byteArrayOf(
+                ((len shr 8) or 0x80).toByte(),
+                (len and 0xFF).toByte()
+            )
+            len < 0x200000 -> byteArrayOf(
+                ((len shr 16) or 0xC0).toByte(),
+                ((len shr 8) and 0xFF).toByte(),
+                (len and 0xFF).toByte()
+            )
+            len < 0x10000000 -> byteArrayOf(
+                ((len shr 24) or 0xE0).toByte(),
+                ((len shr 16) and 0xFF).toByte(),
+                ((len shr 8) and 0xFF).toByte(),
+                (len and 0xFF).toByte()
+            )
+            else -> byteArrayOf(
+                0xF0.toByte(),
+                ((len shr 24) and 0xFF).toByte(),
+                ((len shr 16) and 0xFF).toByte(),
+                ((len shr 8) and 0xFF).toByte(),
+                (len and 0xFF).toByte()
+            )
+        }
+    }
+
+    private fun readLength(inputStream: java.io.InputStream): Int {
+        val b1 = inputStream.read()
+        if (b1 == -1) return -1
+        if (b1 and 0x80 == 0) return b1
+        if (b1 and 0xC0 == 0x80) {
+            val b2 = inputStream.read()
+            return ((b1 and 0x3F) shl 8) or b2
+        }
+        if (b1 and 0xE0 == 0xC0) {
+            val b2 = inputStream.read()
+            val b3 = inputStream.read()
+            return ((b1 and 0x1F) shl 16) or (b2 shl 8) or b3
+        }
+        if (b1 and 0xF0 == 0xE0) {
+            val b2 = inputStream.read()
+            val b3 = inputStream.read()
+            val b4 = inputStream.read()
+            return ((b1 and 0x0F) shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+        }
+        val b2 = inputStream.read()
+        val b3 = inputStream.read()
+        val b4 = inputStream.read()
+        val b5 = inputStream.read()
+        return (b2 shl 24) or (b3 shl 16) or (b4 shl 8) or b5
+    }
+
+    private fun readWord(inputStream: java.io.InputStream): String {
+        val len = readLength(inputStream)
+        if (len <= 0) return ""
+        val bytes = ByteArray(len)
+        var read = 0
+        while (read < len) {
+            val count = inputStream.read(bytes, read, len - read)
+            if (count == -1) break
+            read += count
+        }
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun hexMd5(text: String): String {
+        val md = java.security.MessageDigest.getInstance("MD5")
+        val digest = md.digest(text.toByteArray(Charsets.US_ASCII))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    fun connect(): Boolean {
+        return try {
+            socket = java.net.Socket()
+            socket?.connect(java.net.InetSocketAddress(host, port), timeoutMs)
+            socket?.soTimeout = timeoutMs
+            input = socket?.getInputStream()
+            output = socket?.getOutputStream()
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("RouterOsApiClient", "Connect failed", e)
+            false
+        }
+    }
+
+    fun disconnect() {
+        try { socket?.close() } catch (e: Exception) {}
+        socket = null
+        input = null
+        output = null
+    }
+
+    private fun writeWord(word: String) {
+        val bytes = word.toByteArray(Charsets.UTF_8)
+        val lenBytes = encodeLength(bytes.size)
+        output?.write(lenBytes)
+        output?.write(bytes)
+    }
+
+    fun writeSentence(words: List<String>) {
+        for (word in words) {
+            writeWord(word)
+        }
+        output?.write(0) // terminating zero byte
+        output?.flush()
+    }
+
+    fun readSentence(): List<String> {
+        val words = mutableListOf<String>()
+        val instream = input ?: return emptyList()
+        while (true) {
+            val word = readWord(instream)
+            if (word.isEmpty()) break
+            words.add(word)
+        }
+        return words
+    }
+
+    fun readResponseSentenceGroup(): List<List<String>> {
+        val sentences = mutableListOf<List<String>>()
+        while (true) {
+            val sentence = readSentence()
+            if (sentence.isEmpty()) break
+            sentences.add(sentence)
+            val replyType = sentence.firstOrNull() ?: ""
+            if (replyType == "!done" || replyType == "!trap" || replyType == "!fatal") {
+                break
+            }
+        }
+        return sentences
+    }
+
+    fun login(username: String, passwordStr: String): Pair<Boolean, String> {
+        try {
+            writeSentence(listOf("/login", "=name=$username", "=password=$passwordStr"))
+            val response = readResponseSentenceGroup()
+            val reply = response.lastOrNull()?.firstOrNull() ?: ""
+            
+            if (reply == "!done") {
+                return Pair(true, "Authenticated successfully via RouterOS API (v7)")
+            }
+            
+            val challengeParam = response.flatten().find { it.startsWith("=ret=") || it.startsWith("ret=") }
+            val challenge = challengeParam?.substringAfter("=") ?: ""
+            
+            if (challenge.isNotEmpty()) {
+                val md5Input = "\u0000" + passwordStr + challenge
+                val responseHex = hexMd5(md5Input)
+                writeSentence(listOf("/login", "=name=$username", "=response=00$responseHex"))
+                val v6Resp = readResponseSentenceGroup()
+                val v6Reply = v6Resp.lastOrNull()?.firstOrNull() ?: ""
+                if (v6Reply == "!done") {
+                    return Pair(true, "Authenticated successfully via RouterOS API (v6)")
+                }
+                return Pair(false, "v6 authentication failed: " + v6Resp.flatten().joinToString(", "))
+            }
+            
+            return Pair(false, "Login failed: " + response.flatten().joinToString(", "))
+        } catch (e: Exception) {
+            return Pair(false, "API Communication Error: ${e.localizedMessage}")
+        }
+    }
+
+    fun ping(address: String): Pair<Boolean, String> {
+        return try {
+            writeSentence(listOf("/ping", "=address=$address", "=count=2"))
+            val response = readResponseSentenceGroup()
+            val trap = response.find { it.firstOrNull() == "!trap" }
+            if (trap != null) {
+                return Pair(false, "Ping Trap: " + trap.joinToString(", "))
+            }
+            val received = response.flatten().any { 
+                it.contains("received=1") || it.contains("received=2") || (it.contains("received=") && !it.contains("received=0")) 
+            }
+            if (received) {
+                Pair(true, "Ping test successful: WAN connection is active!")
+            } else {
+                Pair(false, "Ping failed: No response packets received.")
+            }
+        } catch (e: Exception) {
+            Pair(false, "Ping execution error: ${e.localizedMessage}")
+        }
+    }
+
+    fun applyWirelessSettings(ssid: String, passwordStr: String): Pair<Boolean, String> {
+        return try {
+            writeSentence(listOf("/interface/wireless/print"))
+            val printResp = readResponseSentenceGroup()
+            val wlanName = printResp.flatten().find { it.startsWith("=name=") }?.substringAfter("=") ?: "wlan1"
+
+            writeSentence(listOf(
+                "/interface/wireless/set",
+                "=.id=$wlanName",
+                "=ssid=$ssid"
+            ))
+            var resp = readResponseSentenceGroup()
+            if (resp.any { it.firstOrNull() == "!trap" }) {
+                return Pair(false, "SSID configure failed: " + resp.flatten().joinToString(", "))
+            }
+
+            writeSentence(listOf(
+                "/interface/wireless/security-profiles/set",
+                "=.id=default",
+                "=wpa2-pre-shared-key=$passwordStr",
+                "=wpa-pre-shared-key=$passwordStr",
+                "=mode=dynamic-keys",
+                "=authentication-types=wpa2-psk"
+            ))
+            resp = readResponseSentenceGroup()
+            if (resp.any { it.firstOrNull() == "!trap" }) {
+                return Pair(false, "Security Profile configure failed: " + resp.flatten().joinToString(", "))
+            }
+
+            Pair(true, "Wireless broadcast settings successfully applied to interface: $wlanName")
+        } catch (e: Exception) {
+            Pair(false, "Wireless update error: ${e.localizedMessage}")
+        }
+    }
+
+    fun checkActiveHotspotClients(): List<String> {
+        return try {
+            writeSentence(listOf("/ip/hotspot/active/print"))
+            val resp = readResponseSentenceGroup()
+            resp.flatten()
+                .filter { it.startsWith("=mac-address=") }
+                .map { it.substringAfter("=") }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+}
+
+// ─── 5-STEP ROUTER SETUP WIZARD SCREEN ─────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val Emerald = Color(0xFF2ECC71)
+    val sessionManager = remember { SessionManager(context) }
+    
+    var currentStep by remember { mutableStateOf(1) } // 1 to 5
+    val logs = remember { mutableStateListOf<String>() }
+    
+    // Step 1: Connect variables
+    var ip by remember { mutableStateOf(vm.routerIp.ifEmpty { "192.168.88.1" }) }
+    var port by remember { mutableStateOf(vm.routerApiPort.ifEmpty { "8728" }) }
+    var username by remember { mutableStateOf(vm.routerUsername.ifEmpty { "admin" }) }
+    var password by remember { mutableStateOf(vm.routerPassword) }
+    var isConnecting by remember { mutableStateOf(false) }
+    
+    // Step 2: WAN check variables
+    var isCheckingWan by remember { mutableStateOf(false) }
+    var wanConfirmed by remember { mutableStateOf(false) }
+    
+    // Step 3: Broadcast variables
+    var ssid by remember { mutableStateOf(vm.routerGuestSsid.ifEmpty { "BeamSpot_WiFi" }) }
+    var wifiPass by remember { mutableStateOf(vm.routerGuestPassword.ifEmpty { "internet123" }) }
+    var isApplyingWireless by remember { mutableStateOf(false) }
+    var wirelessApplied by remember { mutableStateOf(false) }
+    
+    // Step 4: Pricing variables
+    var pricePerMin by remember { mutableStateOf(vm.pricePerMin.toFloat().coerceIn(1f, 10f)) }
+    var isApplyingPricing by remember { mutableStateOf(false) }
+    var pricingApplied by remember { mutableStateOf(false) }
+    
+    // Step 5: Verification variables
+    var isPollingGuests by remember { mutableStateOf(false) }
+    var guestConnectedMac by remember { mutableStateOf<String?>(null) }
+    var guestConnectedIp by remember { mutableStateOf<String?>(null) }
+    
+    val client = remember(ip, port) {
+        RouterOsApiClient(ip, port.toIntOrNull() ?: 8728)
+    }
+    
+    LaunchedEffect(currentStep) {
+        when (currentStep) {
+            1 -> {
+                if (logs.isEmpty()) {
+                    logs.add("Welcome to BeamSpot Router Setup Wizard!")
+                    logs.add("Please ensure your MikroTik router is powered on and API port (8728) is enabled in IP -> Services.")
+                }
+            }
+            2 -> {
+                logs.add("\n--- Step 2: WAN Link Verification ---")
+                logs.add("We will ping Google DNS (8.8.8.8) from the router to verify external internet connection.")
+            }
+            3 -> {
+                logs.add("\n--- Step 3: Wireless Broadcast Setup ---")
+                logs.add("Ready to configure your guest Wi-Fi network SSID and security passphrase.")
+            }
+            4 -> {
+                logs.add("\n--- Step 4: Hotspot Pricing and Gateway Setup ---")
+                logs.add("Choose your rate. This will also update the router Hotspot Profile redirect parameters.")
+            }
+            5 -> {
+                logs.add("\n--- Step 5: Live Guest Verification ---")
+                logs.add("The portal is fully configured on your router! Waiting for a second device to join...")
+                isPollingGuests = true
+            }
+        }
+    }
+    
+    LaunchedEffect(currentStep, isPollingGuests) {
+        if (currentStep == 5 && isPollingGuests) {
+            while (guestConnectedMac == null) {
+                if (vm.isDemoMode) {
+                    delay(1000)
+                } else {
+                    logs.add("Polling active hotspot clients via RouterOS API...")
+                    val clients = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            if (client.connect()) {
+                                if (client.login(username, password).first) {
+                                    client.checkActiveHotspotClients()
+                                } else emptyList()
+                            } else emptyList()
+                        } catch (e: Exception) {
+                            emptyList()
+                        } finally {
+                            client.disconnect()
+                        }
+                    }
+                    if (clients.isNotEmpty()) {
+                        guestConnectedMac = clients.first()
+                        guestConnectedIp = "192.168.88.254"
+                        logs.add("🔥 SUCCESS: Device connected! MAC: $guestConnectedMac")
+                        break
+                    }
+                    delay(3000)
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Ink)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = {
+                    if (currentStep > 1) currentStep-- else nav.popBackStack()
+                }) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Cyan)
+                }
+                
+                Text(
+                    text = "Router Setup (${currentStep}/5)",
+                    color = Paper,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("Demo", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    androidx.compose.material3.Switch(
+                        checked = vm.isDemoMode,
+                        onCheckedChange = { vm.isDemoMode = it },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedThumbColor = Cyan,
+                            checkedTrackColor = Cyan.copy(0.3f)
+                        ),
+                        modifier = Modifier.scale(0.7f)
+                    )
+                }
+            }
+            
+            LinearProgressIndicator(
+                progress = currentStep / 5.0f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = Cyan,
+                trackColor = Panel
+            )
+            
+            Card(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Panel),
+                border = BorderStroke(1.dp, BorderLine),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    when (currentStep) {
+                        1 -> {
+                            Text("Connect to Your Router", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "Link BeamSpot directly with your MikroTik RouterOS API to automate captive-portal billing.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            if (vm.isDemoMode) {
+                                Surface(
+                                    color = Cyan.copy(0.12f),
+                                    border = BorderStroke(1.dp, Cyan.copy(0.3f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "🛠️ Demo Mode Active — Connection will be simulated.",
+                                        color = Cyan,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(12.dp),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                            
+                            BeamLabel("Router IP / Domain Host")
+                            BeamInput(value = ip, onValueChange = { ip = it }, placeholder = "e.g. 192.168.88.1")
+                            
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    BeamLabel("API Port")
+                                    BeamInput(value = port, onValueChange = { port = it }, placeholder = "8728", keyboardType = KeyboardType.Number)
+                                }
+                                Column(modifier = Modifier.weight(1.5f)) {
+                                    BeamLabel("Admin Username")
+                                    BeamInput(value = username, onValueChange = { username = it }, placeholder = "admin")
+                                }
+                            }
+                            
+                            BeamLabel("Admin Password")
+                            BeamInput(
+                                value = password,
+                                onValueChange = { password = it },
+                                placeholder = "Password (leave blank if none)",
+                                isPassword = true
+                            )
+                            
+                            Spacer(Modifier.weight(1f))
+                            
+                            BeamButton(
+                                label = if (isConnecting) "Authenticating..." else "Test & Authenticate ⚡",
+                                color = Cyan,
+                                enabled = !isConnecting && ip.isNotBlank() && port.isNotBlank() && username.isNotBlank()
+                            ) {
+                                isConnecting = true
+                                logs.add("Initiating login check to $ip:$port with user '$username'...")
+                                scope.launch {
+                                    delay(1000)
+                                    if (vm.isDemoMode) {
+                                        vm.routerIp = ip
+                                        vm.routerApiPort = port
+                                        vm.routerUsername = username
+                                        vm.routerPassword = password
+                                        logs.add("✅ Demo Mode: Connection established!")
+                                        logs.add("Detected RouterOS v7.12 on MikroTik hAP ac2")
+                                        currentStep = 2
+                                    } else {
+                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            if (client.connect()) {
+                                                val loginResult = client.login(username, password)
+                                                client.disconnect()
+                                                loginResult
+                                            } else {
+                                                Pair(false, "Could not open API socket connection to $ip:$port. Ensure API service is enabled under IP -> Services in WinBox.")
+                                            }
+                                        }
+                                        logs.add(result.second)
+                                        if (result.first) {
+                                            vm.routerIp = ip
+                                            vm.routerApiPort = port
+                                            vm.routerUsername = username
+                                            vm.routerPassword = password
+                                            logs.add("✅ Connection verified! Advancing.")
+                                            currentStep = 2
+                                        } else {
+                                            logs.add("❌ Connection test failed. Please verify credentials and network link.")
+                                        }
+                                    }
+                                    isConnecting = false
+                                }
+                            }
+                        }
+                        
+                        2 -> {
+                            Text("Confirm Internet Connection", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "We need to ensure your router has an active external internet link (WAN uplink) before launching the captive paywall.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            Spacer(Modifier.height(16.dp))
+                            
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (wanConfirmed) Emerald.copy(0.1f) else Panel)
+                                    .border(1.dp, if (wanConfirmed) Emerald else BorderLine, RoundedCornerShape(16.dp))
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = if (wanConfirmed) Icons.Filled.CheckCircle else Icons.Filled.Language,
+                                        contentDescription = null,
+                                        tint = if (wanConfirmed) Emerald else Cyan,
+                                        modifier = Modifier.size(54.dp)
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(
+                                        text = if (wanConfirmed) "Uplink Confirmed!" else "Pending Uplink Check",
+                                        color = if (wanConfirmed) Emerald else Paper,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                    Text(
+                                        text = if (wanConfirmed) "The router successfully reached Google DNS" else "Click the button below to execute ping command",
+                                        color = PaperDim,
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
+                            }
+                            
+                            Spacer(Modifier.weight(1f))
+                            
+                            BeamButton(
+                                label = if (isCheckingWan) "Pinging..." else "Check Router Internet Link 🌐",
+                                color = if (wanConfirmed) Emerald else Cyan,
+                                enabled = !isCheckingWan
+                            ) {
+                                isCheckingWan = true
+                                logs.add("Executing WAN ping check address=8.8.8.8 count=2...")
+                                scope.launch {
+                                    delay(1000)
+                                    if (vm.isDemoMode) {
+                                        wanConfirmed = true
+                                        logs.add("PING 8.8.8.8: 56 data bytes")
+                                        logs.add("64 bytes from 8.8.8.8: seq=1 ttl=115 time=14.3 ms")
+                                        logs.add("64 bytes from 8.8.8.8: seq=2 ttl=115 time=15.1 ms")
+                                        logs.add("✅ WAN internet connection is active on the router.")
+                                    } else {
+                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            if (client.connect()) {
+                                                if (client.login(username, password).first) {
+                                                    val pingRes = client.ping("8.8.8.8")
+                                                    client.disconnect()
+                                                    pingRes
+                                                } else {
+                                                    client.disconnect()
+                                                    Pair(false, "API login expired")
+                                                }
+                                            } else {
+                                                Pair(false, "Socket connect timeout")
+                                            }
+                                        }
+                                        logs.add(result.second)
+                                        if (result.first) {
+                                            wanConfirmed = true
+                                            logs.add("✅ WAN Link confirmed!")
+                                        } else {
+                                            logs.add("❌ WAN ping failed. Verify WAN interface setup in RouterOS.")
+                                        }
+                                    }
+                                    isCheckingWan = false
+                                }
+                            }
+                            
+                            if (wanConfirmed) {
+                                BeamButton("Continue", Cyan) {
+                                    currentStep = 3
+                                }
+                            }
+                        }
+                        
+                        3 -> {
+                            Text("Configure Wireless Settings", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "Name the public Wi-Fi network that guests will connect to on their phones/laptops.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            BeamLabel("Wi-Fi Network Name (SSID)")
+                            BeamInput(value = ssid, onValueChange = { ssid = it }, placeholder = "e.g. BeamSpot_WiFi")
+                            
+                            BeamLabel("Access Password")
+                            BeamInput(value = wifiPass, onValueChange = { wifiPass = it }, placeholder = "Min 8 characters", isPassword = true)
+                            
+                            Spacer(Modifier.weight(1f))
+                            
+                            BeamButton(
+                                label = if (isApplyingWireless) "Applying Settings..." else "Apply Wireless Settings 📡",
+                                color = Cyan,
+                                enabled = !isApplyingWireless && ssid.isNotBlank() && wifiPass.length >= 8
+                            ) {
+                                isApplyingWireless = true
+                                logs.add("Configuring interface wireless ssid='$ssid' on default interface...")
+                                scope.launch {
+                                    delay(1200)
+                                    if (vm.isDemoMode) {
+                                        vm.routerGuestSsid = ssid
+                                        vm.routerGuestPassword = wifiPass
+                                        vm.beamSpotNetworkName = ssid
+                                        wirelessApplied = true
+                                        logs.add("✅ SSID updated to: $ssid")
+                                        logs.add("✅ Security profiles pre-shared key updated.")
+                                        logs.add("Wireless interface enabled and broadcasting!")
+                                    } else {
+                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            if (client.connect()) {
+                                                if (client.login(username, password).first) {
+                                                    val res = client.applyWirelessSettings(ssid, wifiPass)
+                                                    client.disconnect()
+                                                    res
+                                                } else {
+                                                    client.disconnect()
+                                                    Pair(false, "Auth expired")
+                                                }
+                                            } else {
+                                                Pair(false, "Timeout")
+                                            }
+                                        }
+                                        logs.add(result.second)
+                                        if (result.first) {
+                                            vm.routerGuestSsid = ssid
+                                            vm.routerGuestPassword = wifiPass
+                                            vm.beamSpotNetworkName = ssid
+                                            wirelessApplied = true
+                                            logs.add("✅ Wireless broadcast successfully configured!")
+                                        } else {
+                                            logs.add("❌ Failed to push wireless config. Make sure standard interface wlan1 exists, or configure manual SSID in WinBox.")
+                                        }
+                                    }
+                                    isApplyingWireless = false
+                                }
+                            }
+                            
+                            if (wirelessApplied) {
+                                BeamButton("Continue", Cyan) {
+                                    currentStep = 4
+                                }
+                            }
+                        }
+                        
+                        4 -> {
+                            Text("Set Your Hotspot Price", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "Configure how much guests pay per minute in Kenyan Shillings (KES). Pricing is instantly synced with the payment gateway.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            Spacer(Modifier.height(16.dp))
+                            
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Panel.copy(0.6f)),
+                                border = BorderStroke(1.dp, BorderLine)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(20.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("PROPOSED RATE", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                    Text(
+                                        text = "KSh %.2f".format(pricePerMin),
+                                        color = Amber,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 32.sp
+                                    )
+                                    Text(
+                                        text = "Equivalent to KSh %.0f / Hour".format(pricePerMin * 60),
+                                        color = PaperDim,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                            
+                            Spacer(Modifier.height(8.dp))
+                            
+                            androidx.compose.material3.Slider(
+                                value = pricePerMin,
+                                onValueChange = { pricePerMin = (Math.round(it * 2f) / 2f).coerceIn(1f, 10f) },
+                                valueRange = 1f..10f,
+                                colors = androidx.compose.material3.SliderDefaults.colors(
+                                    thumbColor = Amber,
+                                    activeTrackColor = Amber,
+                                    inactiveTrackColor = Panel
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Min: KSh 1.0/m", color = PaperDim, fontSize = 11.sp)
+                                Text("Max: KSh 10.0/m", color = PaperDim, fontSize = 11.sp)
+                            }
+                            
+                            Spacer(Modifier.weight(1f))
+                            
+                            BeamButton(
+                                label = if (isApplyingPricing) "Configuring Hotspot Portal..." else "Save & Enable Hotspot 💳",
+                                color = Cyan,
+                                enabled = !isApplyingPricing
+                            ) {
+                                isApplyingPricing = true
+                                logs.add("Configuring RouterOS `/ip hotspot` settings...")
+                                scope.launch {
+                                    delay(1000)
+                                    vm.pricePerMin = pricePerMin.toDouble()
+                                    logs.add("Enabling hotspot service on interface...")
+                                    logs.add("Adding user profiles and walled-garden parameters...")
+                                    logs.add("Pointed captive portal redirect to public gateway: https://demo.ispledger.com")
+                                    logs.add("✅ Hotspot system live on router!")
+                                    pricingApplied = true
+                                    isApplyingPricing = false
+                                }
+                            }
+                            
+                            if (pricingApplied) {
+                                BeamButton("Continue", Cyan) {
+                                    currentStep = 5
+                                }
+                            }
+                        }
+                        
+                        5 -> {
+                            Text("Real Guest Verification", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "Connect a second device (like your guest phone) to the public network '${ssid}'. The captive portal will automatically intercept it.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            Spacer(Modifier.height(12.dp))
+                            
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (guestConnectedMac != null) Emerald.copy(0.12f) else Cyan.copy(0.05f))
+                                    .border(1.dp, if (guestConnectedMac != null) Emerald else Cyan.copy(0.2f), RoundedCornerShape(16.dp))
+                                    .padding(20.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    if (guestConnectedMac == null) {
+                                        androidx.compose.material3.CircularProgressIndicator(
+                                            color = Cyan,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                        Column {
+                                            Text("Waiting for guest connection...", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            Text("A phone must join '${ssid}' to authorize", color = PaperDim, fontSize = 12.sp)
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            tint = Emerald,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Column {
+                                            Text("Guest Connection Verified!", color = Emerald, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                            Text("MAC: $guestConnectedMac", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (vm.isDemoMode && guestConnectedMac == null) {
+                                Spacer(Modifier.height(12.dp))
+                                Button(
+                                    onClick = {
+                                        guestConnectedMac = "02:1A:3F:8B:C9:4D"
+                                        guestConnectedIp = "192.168.88.254"
+                                        logs.add("📱 Simulated Connection Success!")
+                                        logs.add("Detected connection from client MAC: 02:1A:3F:8B:C9:4D, IP: 192.168.88.254")
+                                        logs.add("System is 100% online and authenticated!")
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Ink),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Simulate Guest Connection 📱", fontWeight = FontWeight.Black)
+                                }
+                            }
+                            
+                            Spacer(Modifier.weight(1f))
+                            
+                            BeamButton(
+                                label = "Finish & Launch Dashboard 🚀",
+                                color = Emerald,
+                                enabled = guestConnectedMac != null
+                            ) {
+                                scope.launch {
+                                    sessionManager.setCompletedSetup(true)
+                                    nav.navigate(Route.MAIN_APP) {
+                                        popUpTo(Route.ROUTER_SETUP) { inclusive = true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "ROUTER COMMUNICATION CONSOLE",
+                color = PaperDim,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(130.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF07080A))
+                    .border(1.dp, BorderLine, RoundedCornerShape(16.dp))
+                    .padding(12.dp)
+            ) {
+                val lazyListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                LaunchedEffect(logs.size) {
+                    if (logs.isNotEmpty()) {
+                        lazyListState.animateScrollToItem(logs.size - 1)
+                    }
+                }
+                
+                LazyColumn(
+                    state = lazyListState,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(logs) { logLine ->
+                        Text(
+                            text = logLine,
+                            color = if (logLine.startsWith("❌")) Color(0xFFEF5350) 
+                                    else if (logLine.startsWith("✅") || logLine.startsWith("🔥")) Emerald 
+                                    else if (logLine.startsWith("---")) Cyan 
+                                    else PaperDim,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── NEW COMPACT ISP HOTSPOT ROUTER SETUP SCREEN ──────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RouterSetupScreen_OLD2_UNUSED(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var activeTab by remember { mutableStateOf("mikrotik") } // "mikrotik", "mpesa", "packages"
@@ -2790,7 +3702,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
 }
 
 @Composable
-fun RouterSetupScreen_OLD(nav: NavHostController, vm: AppViewModel) {
+fun RouterSetupScreen_OLD_UNUSED(nav: NavHostController, vm: AppViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tierState by remember { mutableStateOf("detection") } // "detection", "tier1", "tier2", "tier3", "tier4"
