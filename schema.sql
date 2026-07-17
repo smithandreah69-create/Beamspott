@@ -84,3 +84,33 @@ CREATE TABLE IF NOT EXISTS payouts (
     sent_at     TIMESTAMPTZ,
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Router Master Profiles for auto-detection
+CREATE TABLE IF NOT EXISTS router_brand_profiles (
+    id                               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    brand                            TEXT NOT NULL,
+    mac_prefix                       VARCHAR(6) UNIQUE, -- 6 hex chars, e.g., '34E894'
+    gateway_ip                       TEXT,              -- e.g., '192.168.0.1'
+    requires_unique_sticker_password BOOLEAN NOT NULL DEFAULT FALSE,
+    target_login_url                 TEXT,
+    request_method                   TEXT DEFAULT 'POST',
+    payload_format                   TEXT DEFAULT 'FORM_DATA',
+    username_field                   TEXT DEFAULT 'username',
+    password_field                   TEXT DEFAULT 'password',
+    real_time_credentials            JSONB DEFAULT '[]'::jsonb, -- Array of objects: {username, password}
+    created_at                       TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insert seed profiles if not already present
+INSERT INTO router_brand_profiles (brand, mac_prefix, gateway_ip, requires_unique_sticker_password, target_login_url, real_time_credentials)
+VALUES 
+('MikroTik', '18FD74', '192.168.88.1', FALSE, 'http://192.168.88.1', '[{"username": "admin", "password": ""}]'::jsonb),
+('TP-Link', '34E894', '192.168.0.1', FALSE, 'http://192.168.0.1', '[{"username": "admin", "password": "admin"}, {"username": "admin", "password": ""}]'::jsonb),
+('Tenda', '502AAF', '192.168.0.1', FALSE, 'http://192.168.0.1', '[{"username": "", "password": "admin"}, {"username": "admin", "password": "admin"}]'::jsonb),
+('Huawei', '283152', '192.168.8.1', FALSE, 'http://192.168.8.1', '[{"username": "admin", "password": "admin"}, {"username": "telecomadmin", "password": "admintelecom"}, {"username": "root", "password": "admin"}]'::jsonb),
+('D-Link', '1CB094', '192.168.0.1', FALSE, 'http://192.168.0.1', '[{"username": "admin", "password": ""}, {"username": "admin", "password": "admin"}, {"username": "admin", "password": "password"}]'::jsonb),
+('ASUS', 'F07960', '192.168.50.1', FALSE, 'http://192.168.50.1', '[{"username": "admin", "password": "admin"}, {"username": "admin", "password": "password"}]'::jsonb),
+('TP-Link Archer Series (Modern)', '74DA38', '192.168.1.1', TRUE, NULL, '[]'::jsonb),
+('Tenda Nova Series (Modern)', '502AB0', '192.168.5.1', TRUE, NULL, '[]'::jsonb)
+ON CONFLICT (mac_prefix) DO NOTHING;
+

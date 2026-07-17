@@ -31,6 +31,10 @@ app.use(helmet());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public'))); // serve guest web page
 
+// Mount router fingerprinting endpoint
+const routerFingerprint = require('./routes/routerFingerprint');
+app.use(routerFingerprint);
+
 // Rate limiting
 const generalLimit = rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many requests' } });
 const authLimit    = rateLimit({ windowMs: 15 * 60_000, max: 10, message: { error: 'Too many auth attempts' } });

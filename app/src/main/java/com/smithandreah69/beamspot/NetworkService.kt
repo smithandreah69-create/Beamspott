@@ -106,6 +106,40 @@ data class PayoutDetailsResponse(
     val bankHolder: String?
 )
 
+// Router fingerprinting data models
+data class HttpBanner(
+    val server_header: String?,
+    val page_title: String?,
+    val meta_vendor: String?
+)
+
+data class RouterFingerprintRequest(
+    val gateway_ip: String,
+    val mac_prefix: String,
+    val http_banner: HttpBanner?
+)
+
+data class ExecutionProfile(
+    val target_login_url: String?,
+    val request_method: String?,
+    val payload_format: String?,
+    val username_field: String?,
+    val password_field: String?
+)
+
+data class RealTimeCredential(
+    val username: String,
+    val password: String
+)
+
+data class RouterFingerprintResponse(
+    val status: String,
+    val brand: String,
+    val requires_unique_sticker_password: Boolean,
+    val execution_profile: ExecutionProfile?,
+    val real_time_credentials: List<RealTimeCredential>
+)
+
 // ─── Retrofit Service Interface ──────────────────────────────────────────
 
 interface ApiService {
@@ -135,6 +169,9 @@ interface ApiService {
 
     @POST("api/hosts/withdraw")
     suspend fun withdrawEarnings(): Any
+
+    @POST("api/v1/router/fingerprint")
+    suspend fun fingerprintRouter(@Body request: RouterFingerprintRequest): RouterFingerprintResponse
 }
 
 // ─── Retrofit Client Singleton ────────────────────────────────────────────

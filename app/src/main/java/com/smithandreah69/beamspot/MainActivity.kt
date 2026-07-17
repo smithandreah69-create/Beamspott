@@ -2454,6 +2454,69 @@ private val routerDefaults: Map<String, List<RouterDefault>> = mapOf(
     "ZTE" to listOf(RouterDefault("admin", "admin"), RouterDefault("admin", ""))
 )
 
+private val macBrandLookup = mapOf(
+    "4C5E0C" to "MikroTik",
+    "085531" to "MikroTik",
+    "18FD74" to "MikroTik",
+    "64D154" to "MikroTik",
+    "D4CA6D" to "MikroTik",
+    "E81132" to "MikroTik",
+    "B869F4" to "MikroTik",
+    "503FAA" to "TP-Link",
+    "74DA38" to "TP-Link",
+    "A0F3C1" to "TP-Link",
+    "C025E9" to "TP-Link",
+    "E894F6" to "TP-Link",
+    "18A6F7" to "TP-Link",
+    "EC086B" to "TP-Link",
+    "283152" to "Huawei",
+    "285FDB" to "Huawei",
+    "286ED4" to "Huawei",
+    "707BE8" to "Huawei",
+    "84DBAC" to "Huawei",
+    "D016B0" to "Huawei",
+    "C83A35" to "Tenda",
+    "D83214" to "Tenda",
+    "502AAF" to "Tenda",
+    "C0A5DD" to "Tenda",
+    "18622C" to "D-Link",
+    "1C7EE5" to "D-Link",
+    "28107B" to "D-Link",
+    "84C9B2" to "D-Link",
+    "908D78" to "D-Link",
+    "D8FE14" to "D-Link",
+    "001F33" to "Netgear",
+    "10DA43" to "Netgear",
+    "20E52A" to "Netgear",
+    "44A56E" to "Netgear",
+    "841B5E" to "Netgear",
+    "9C3DFF" to "Netgear",
+    "04D9F5" to "ASUS",
+    "107B44" to "ASUS",
+    "1C872C" to "ASUS",
+    "305A3A" to "ASUS",
+    "50465D" to "ASUS",
+    "AC9E17" to "ASUS",
+    "001A70" to "Cisco / Linksys",
+    "001EE5" to "Cisco / Linksys",
+    "00259C" to "Cisco / Linksys",
+    "14EDBB" to "Cisco / Linksys",
+    "30E4DB" to "Cisco / Linksys",
+    "E03F49" to "Cisco / Linksys",
+    "002293" to "ZTE",
+    "34E894" to "Tenda"
+)
+
+private val gatewayBrandLookup = mapOf(
+    "192.168.88.1" to listOf("MikroTik"),
+    "192.168.0.1" to listOf("TP-Link", "Tenda", "D-Link", "Netgear", "ZTE"),
+    "192.168.1.1" to listOf("TP-Link", "Huawei", "Tenda", "D-Link", "Netgear", "ASUS", "Cisco / Linksys", "ZTE"),
+    "192.168.8.1" to listOf("Huawei"),
+    "192.168.100.1" to listOf("Huawei"),
+    "192.168.50.1" to listOf("ASUS"),
+    "192.168.15.1" to listOf("Cisco / Linksys")
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
@@ -2475,9 +2538,19 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     var showBrandDialog by remember { mutableStateOf(false) }
     var brandAuthErrorMessage by remember { mutableStateOf("") }
     var triedDefaults by remember { mutableStateOf(false) }
+    
+    var detectedMacPrefix by remember { mutableStateOf("") }
+    var macMatchedBrand by remember { mutableStateOf<String?>(null) }
+    var gatewayMatchedBrands by remember { mutableStateOf<List<String>>(emptyList()) }
+    var customBrandName by remember { mutableStateOf("") }
+    var showStickerDialog by remember { mutableStateOf(false) }
+    var showGatewayDropdownMenu by remember { mutableStateOf(false) }
+    var requiresUniqueStickerPassword by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         try {
+            // 1. Extract Gateway IP
+            var detectedIp = ""
             val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
             val activeNetwork = connectivityManager?.activeNetwork
             val linkProperties = connectivityManager?.getLinkProperties(activeNetwork)
@@ -2486,7 +2559,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 ?.gateway?.hostAddress
             
             if (!gatewayFromRoutes.isNullOrEmpty() && gatewayFromRoutes != "0.0.0.0") {
-                ip = gatewayFromRoutes
+                detectedIp = gatewayFromRoutes
             } else {
                 val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
                 val dhcpInfo = wifiManager?.dhcpInfo
@@ -2501,8 +2574,137 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                         (gatewayIpInt shr 24) and 0xFF
                     )
                     if (gatewayIpStr != "0.0.0.0") {
-                        ip = gatewayIpStr
+                        detectedIp = gatewayIpStr
                     }
+                }
+            }
+            
+            ip = detectedIp
+            
+            // 2. Extract BSSID (MAC Address)
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val connectionInfo = wifiManager?.connectionInfo
+            val rawBssid = connectionInfo?.bssid
+            var prefix = ""
+            if (!rawBssid.isNullOrEmpty() && rawBssid != "02:00:00:00:00:00") {
+                val cleanBssid = rawBssid.replace(":", "").replace("-", "").uppercase()
+                if (cleanBssid.length >= 6) {
+                    prefix = cleanBssid.substring(0, 6)
+                    detectedMacPrefix = prefix
+                }
+            }
+            
+            // 3. Brand lookup sequence via live backend fingerprinting
+            logs.add("🔍 Initiating live zero-dead-data router identification...")
+            
+            var serverHeader: String? = null
+            var pageTitle: String? = null
+            var metaVendor: String? = null
+
+            if (detectedIp.isNotEmpty()) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val url = java.net.URL("http://$detectedIp")
+                        val connection = url.openConnection() as java.net.HttpURLConnection
+                        connection.connectTimeout = 1500
+                        connection.readTimeout = 1500
+                        connection.requestMethod = "GET"
+                        
+                        serverHeader = connection.getHeaderField("Server")
+                        try {
+                            val inputStream = connection.inputStream
+                            val htmlContent = inputStream.bufferedReader().use { it.readText() }
+                            
+                            val titleMatcher = java.util.regex.Pattern.compile("<title>(.*?)</title>", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(htmlContent)
+                            if (titleMatcher.find()) {
+                                pageTitle = titleMatcher.group(1)?.trim()
+                            }
+                            
+                            if (htmlContent.contains("tplink", ignoreCase = true) || htmlContent.contains("tp-link", ignoreCase = true)) {
+                                metaVendor = "tplink"
+                            } else if (htmlContent.contains("tenda", ignoreCase = true)) {
+                                metaVendor = "tenda"
+                            } else if (htmlContent.contains("huawei", ignoreCase = true)) {
+                                metaVendor = "huawei"
+                            } else if (htmlContent.contains("netgear", ignoreCase = true)) {
+                                metaVendor = "netgear"
+                            } else if (htmlContent.contains("asus", ignoreCase = true)) {
+                                metaVendor = "asus"
+                            }
+                        } catch (ex: Exception) {
+                            // Some routers reject empty user-agent or block connection completely
+                        }
+                        logs.add("📡 Scraped local gateway banner: server='$serverHeader', title='$pageTitle', meta='$metaVendor'")
+                    } catch (e: Exception) {
+                        android.util.Log.d("RouterSetup", "Local HTTP banner scrape failed: ${e.message}")
+                    }
+                }
+            }
+
+            try {
+                val requestPayload = RouterFingerprintRequest(
+                    gateway_ip = detectedIp,
+                    mac_prefix = prefix,
+                    http_banner = HttpBanner(
+                        server_header = serverHeader,
+                        page_title = pageTitle,
+                        meta_vendor = metaVendor
+                    )
+                )
+                val response = RetrofitClient.apiService.fingerprintRouter(requestPayload)
+                
+                selectedBrand = response.brand
+                requiresUniqueStickerPassword = response.requires_unique_sticker_password
+                
+                if (response.requires_unique_sticker_password) {
+                    username = ""
+                    password = ""
+                    showStickerDialog = true
+                    logs.add("🚨 Modern Series Detected: '${response.brand}' requires a unique password printed on sticker.")
+                } else {
+                    val credentials = response.real_time_credentials
+                    if (credentials.isNotEmpty()) {
+                        username = credentials.first().username
+                        password = credentials.first().password
+                        logs.add("⚡ Auto-Populated default credentials for standard/legacy device: user='${credentials.first().username}'")
+                    } else {
+                        username = "admin"
+                        password = ""
+                    }
+                    logs.add("✅ Brand '${response.brand}' identified successfully via Backend API!")
+                }
+            } catch (apiErr: Exception) {
+                android.util.Log.e("RouterSetup", "Backend fingerprinting API failed, falling back to local dataset", apiErr)
+                logs.add("⚠️ Backend API offline. Activating localized hardware fallback...")
+                
+                // FALLBACK TO LOCAL LOOKUPS
+                if (prefix.isNotEmpty() && macBrandLookup.containsKey(prefix)) {
+                    val brand = macBrandLookup[prefix] ?: "MikroTik"
+                    macMatchedBrand = brand
+                    selectedBrand = brand
+                    val defaults = routerDefaults[brand] ?: emptyList()
+                    if (defaults.isNotEmpty()) {
+                        username = defaults.first().username
+                        password = defaults.first().password
+                    }
+                    logs.add("🔍 Local Fallback: BSSID prefix $prefix matched router brand '$brand'!")
+                } else if (detectedIp.isNotEmpty() && gatewayBrandLookup.containsKey(detectedIp)) {
+                    val matched = gatewayBrandLookup[detectedIp] ?: emptyList()
+                    gatewayMatchedBrands = matched
+                    if (matched.isNotEmpty()) {
+                        selectedBrand = matched.first()
+                        val defaults = routerDefaults[selectedBrand] ?: emptyList()
+                        if (defaults.isNotEmpty()) {
+                            username = defaults.first().username
+                            password = defaults.first().password
+                        }
+                    }
+                    logs.add("🔍 Local Fallback: Gateway IP $detectedIp corresponds to potential brands: ${matched.joinToString(", ")}")
+                } else {
+                    selectedBrand = "Other / Not Sure"
+                    username = ""
+                    password = ""
+                    logs.add("🔍 Local Fallback: Unrecognized router brand.")
                 }
             }
         } catch (e: Exception) {
@@ -2693,6 +2895,302 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 }
                             }
 
+                            // Live Hardware Telemetry
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Panel.copy(alpha = 0.5f))
+                                    .border(1.dp, BorderLine, RoundedCornerShape(12.dp))
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Router, contentDescription = null, tint = Cyan, modifier = Modifier.size(24.dp))
+                                Column {
+                                    Text(
+                                        text = "LIVE HARDWARE TELEMETRY",
+                                        color = Cyan,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = "Gateway: ${ip.ifEmpty { "None (Disconnected)" }} | MAC Prefix: ${detectedMacPrefix.ifEmpty { "Not Found" }}",
+                                        color = PaperDim,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+
+                            // Scenario A: MAC Matched Brand Banner
+                            if (macMatchedBrand != null) {
+                                Surface(
+                                    color = Emerald.copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, Emerald.copy(alpha = 0.4f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(Icons.Filled.CheckCircle, contentDescription = "Matched", tint = Emerald, modifier = Modifier.size(20.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Matched via Hardware MAC Address!",
+                                                    color = Paper,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "Your router was auto-detected as a $macMatchedBrand device.",
+                                                    color = PaperDim,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val defaults = routerDefaults[macMatchedBrand] ?: emptyList()
+                                                if (defaults.isNotEmpty()) {
+                                                    username = defaults.first().username
+                                                    password = defaults.first().password
+                                                    logs.add("⚡ Auto-Populated default credentials for $macMatchedBrand.")
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Emerald),
+                                            modifier = Modifier.fillMaxWidth().height(36.dp)
+                                        ) {
+                                            Text("Auto-Populate Credentials ⚡", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Scenario B: Gateway Multi-Option Dropdown Menu
+                            if (gatewayMatchedBrands.isNotEmpty() && macMatchedBrand == null) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Cyan.copy(alpha = 0.08f))
+                                        .border(1.dp, Cyan.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Info, contentDescription = "Info", tint = Cyan, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = "We see your network layout. Which of these brands is your router?",
+                                            color = Paper,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    
+                                    Box(modifier = Modifier.fillMaxWidth()) {
+                                        OutlinedCard(
+                                            onClick = { showGatewayDropdownMenu = true },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = CardDefaults.outlinedCardColors(containerColor = Panel),
+                                            border = BorderStroke(1.dp, BorderLine)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = if (gatewayMatchedBrands.contains(selectedBrand)) selectedBrand else "Select Brand...",
+                                                    color = Paper,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Cyan)
+                                            }
+                                        }
+                                        
+                                        androidx.compose.material3.DropdownMenu(
+                                            expanded = showGatewayDropdownMenu,
+                                            onDismissRequest = { showGatewayDropdownMenu = false },
+                                            modifier = Modifier
+                                                .fillMaxWidth(0.85f)
+                                                .background(Panel)
+                                                .border(1.dp, BorderLine, RoundedCornerShape(8.dp))
+                                        ) {
+                                            gatewayMatchedBrands.forEach { b ->
+                                                androidx.compose.material3.DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = b,
+                                                            color = if (selectedBrand == b) Cyan else Paper,
+                                                            fontSize = 14.sp,
+                                                            fontWeight = if (selectedBrand == b) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        selectedBrand = b
+                                                        val defaults = routerDefaults[b] ?: emptyList()
+                                                        if (defaults.isNotEmpty()) {
+                                                            username = defaults.first().username
+                                                            password = defaults.first().password
+                                                        }
+                                                        brandAuthErrorMessage = ""
+                                                        triedDefaults = false
+                                                        showGatewayDropdownMenu = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Scenario C: Completely Unknown Router Custom Entry & Sticker Dialog helper
+                            if (selectedBrand == "Other / Not Sure") {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    BeamLabel("Custom Router Brand / Model")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            BeamInput(
+                                                value = customBrandName,
+                                                onValueChange = { customBrandName = it },
+                                                placeholder = "e.g. ASUS RT-AX58U"
+                                            )
+                                        }
+                                        
+                                        Button(
+                                            onClick = { showStickerDialog = true },
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Panel),
+                                            border = BorderStroke(1.dp, BorderLine),
+                                            modifier = Modifier.height(50.dp)
+                                        ) {
+                                            Icon(Icons.Filled.Label, contentDescription = "Sticker", tint = Cyan, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Sticker Helper", color = Paper, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (showStickerDialog) {
+                                androidx.compose.ui.window.Dialog(onDismissRequest = { showStickerDialog = false }) {
+                                    Card(
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Panel),
+                                        border = BorderStroke(1.dp, BorderLine),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .padding(24.dp)
+                                                .fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Label,
+                                                contentDescription = null,
+                                                tint = Cyan,
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Text(
+                                                text = "How to Read Router Sticker 🏷️",
+                                                color = Paper,
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                            )
+                                            Text(
+                                                text = "Physical stickers are usually located on the back or bottom of your physical router device.",
+                                                color = PaperDim,
+                                                fontSize = 13.sp,
+                                                textAlign = TextAlign.Center
+                                            )
+                                            
+                                            Column(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Text("1️⃣", fontSize = 14.sp)
+                                                    Text("Find the label upside down on the bottom/back of the device.", color = Paper, fontSize = 13.sp)
+                                                }
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Text("2️⃣", fontSize = 14.sp)
+                                                    Text("Locate fields named 'Web Access', 'Admin User', or 'Login Password'.", color = Paper, fontSize = 13.sp)
+                                                }
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Text("3️⃣", fontSize = 14.sp)
+                                                    Text("Copy those values precisely (case-sensitive) to connect BeamSpot.", color = Paper, fontSize = 13.sp)
+                                                }
+                                            }
+                                            
+                                            Spacer(Modifier.height(8.dp))
+                                            
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = { showStickerDialog = false },
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = BorderLine),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Cancel", color = Paper, fontSize = 12.sp)
+                                                }
+                                                Button(
+                                                    onClick = {
+                                                        username = "admin"
+                                                        password = ""
+                                                        showStickerDialog = false
+                                                    },
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Cyan),
+                                                    modifier = Modifier.weight(1.5f)
+                                                ) {
+                                                    Text("Fill Defaults", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Router Brand Dropdown Selector
                             BeamLabel("Router Brand")
                             OutlinedCard(
@@ -2745,6 +3243,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                         onClick = {
                                                             selectedBrand = brand
                                                             showBrandDialog = false
+                                                            requiresUniqueStickerPassword = false
                                                             if (brand != "Other / Not Sure") {
                                                                 val firstDefault = routerDefaults[brand]?.firstOrNull()
                                                                 if (firstDefault != null) {
@@ -2825,6 +3324,52 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 modifier = Modifier.padding(start = 4.dp)
                             )
 
+                            if (requiresUniqueStickerPassword) {
+                                Spacer(Modifier.height(10.dp))
+                                Surface(
+                                    color = Cyan.copy(0.12f),
+                                    border = BorderStroke(1.dp, Cyan.copy(0.5f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { showStickerDialog = true }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Label,
+                                            contentDescription = null,
+                                            tint = Cyan,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Sticker Password Required 🏷️",
+                                                color = Cyan,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Spacer(Modifier.height(2.dp))
+                                            Text(
+                                                text = "This modern $selectedBrand router utilizes dynamic or randomized factory credentials. Please read the unique password printed on its physical sticker. Click to open the Sticker Helper.",
+                                                color = Paper,
+                                                fontSize = 11.sp,
+                                                lineHeight = 15.sp
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = Icons.Filled.ArrowForward,
+                                            contentDescription = null,
+                                            tint = PaperDim,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+
                             if (brandAuthErrorMessage.isNotEmpty()) {
                                 Spacer(Modifier.height(8.dp))
                                 Surface(
@@ -2860,22 +3405,24 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 brandAuthErrorMessage = ""
                                 logs.add("Initiating connection check to $ip:$port...")
                                 
-                                val defaultsToTry = if (selectedBrand != "Other / Not Sure" && !triedDefaults && password.isEmpty()) {
+                                val defaultsToTry = if (selectedBrand != "Other / Not Sure" && !requiresUniqueStickerPassword && !triedDefaults && password.isEmpty()) {
                                     routerDefaults[selectedBrand] ?: emptyList()
                                 } else {
                                     emptyList()
                                 }
                                 
                                 scope.launch {
-                                    delay(1000)
                                     if (vm.isDemoMode) {
                                         if (defaultsToTry.isNotEmpty()) {
                                             var demoSucceeded = false
                                             for ((index, default) in defaultsToTry.withIndex()) {
+                                                username = default.username
+                                                password = default.password
                                                 logs.add("[$selectedBrand auto-detect] Trying credentials: user='${default.username}', password='${"*".repeat(default.password.length)}' [Attempt ${index + 1}/${defaultsToTry.size}]...")
-                                                delay(500)
-                                                // Simulating hAP ac2 behavior on first default for MikroTik
-                                                if (selectedBrand == "MikroTik") {
+                                                delay(1000) // Paced delay for visual input synchrony
+                                                
+                                                val shouldSucceed = index == 0
+                                                if (shouldSucceed) {
                                                     username = default.username
                                                     password = default.password
                                                     vm.routerUsername = default.username
@@ -2883,7 +3430,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                     vm.routerIp = ip
                                                     vm.routerApiPort = port
                                                     logs.add("✅ Demo Mode: Connection established!")
-                                                    logs.add("Detected RouterOS v7.12 on MikroTik hAP ac2")
+                                                    logs.add("Detected RouterOS v7.12 on $selectedBrand Hardware")
                                                     currentStep = 2
                                                     demoSucceeded = true
                                                     break
@@ -2893,7 +3440,9 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                             }
                                             if (!demoSucceeded) {
                                                 triedDefaults = true
-                                                brandAuthErrorMessage = "None of the common defaults for $selectedBrand worked — you may have changed your admin password. Please check your router's label or enter it manually below."
+                                                username = ""
+                                                password = ""
+                                                brandAuthErrorMessage = "We tried the factory default combinations for this brand, but they did not work. It looks like your admin password was changed during initial setup. Please look at the physical sticker on your router to enter your current custom password."
                                                 logs.add("❌ All defaults failed. Please enter your credentials manually.")
                                             }
                                         } else {
@@ -2908,7 +3457,11 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                         if (defaultsToTry.isNotEmpty()) {
                                             var success = false
                                             for ((index, default) in defaultsToTry.withIndex()) {
+                                                username = default.username
+                                                password = default.password
                                                 logs.add("[$selectedBrand auto-detect] Trying credentials: user='${default.username}', password='${"*".repeat(default.password.length)}' [Attempt ${index + 1}/${defaultsToTry.size}]...")
+                                                delay(1000) // Paced delay for visual input synchrony
+                                                
                                                 val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
                                                         if (client.connect()) {
@@ -2938,7 +3491,9 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                             }
                                             if (!success) {
                                                 triedDefaults = true
-                                                brandAuthErrorMessage = "None of the common defaults for $selectedBrand worked — you may have changed your admin password. Please check your router's label or enter it manually below."
+                                                username = ""
+                                                password = ""
+                                                brandAuthErrorMessage = "We tried the factory default combinations for this brand, but they did not work. It looks like your admin password was changed during initial setup. Please look at the physical sticker on your router to enter your current custom password."
                                                 logs.add("❌ Connection test failed using default credentials. Please type your password manually.")
                                             }
                                         } else {
@@ -2966,6 +3521,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                 currentStep = 2
                                             } else {
                                                 logs.add("❌ Connection test failed. Please verify credentials and network link.")
+                                                brandAuthErrorMessage = "Could not authenticate with entered credentials. Please verify your IP, port, username, and password manually."
                                             }
                                         }
                                     }
