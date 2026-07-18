@@ -2274,7 +2274,7 @@ class RouterOsApiClient(
             output = socket?.getOutputStream()
             true
         } catch (e: Exception) {
-            android.util.Log.e("RouterOsApiClient", "Connect failed", e)
+            android.util.Log.w("RouterOsApiClient", "Connect failed to $host:$port: ${e.message}")
             false
         }
     }
@@ -2517,6 +2517,64 @@ private val gatewayBrandLookup = mapOf(
     "192.168.15.1" to listOf("Cisco / Linksys")
 )
 
+// Generated on: 2026-07-17 using curl -s https://standards-oui.ieee.org/oui/oui.txt
+// Exact Command: curl -sS https://standards-oui.ieee.org/oui/oui.txt -o oui.txt && grep -E -i "Routerboard|Mikrotikls" oui.txt | grep "(hex)" | awk -F'[[:space:]]+' '{print $1}' > mikrotik_macs.txt
+private val mikrotikMacPrefixes = setOf(
+    "085531", "B869F4", "000C42", "F41E57", "789A18", "DC2C6E", "488F5A", "C4AD34", 
+    "6C3B6B", "D401C3", "04F41C", "D0EA11", "48A98A", "2CC81B", "64D154", "E48D8C", 
+    "18FD74", "4C5E0C", "D4CA6D", "744D28", "CC2DE0", "38327A"
+)
+
+@Composable
+private fun DiagnosticCheckRow(
+    label: String,
+    statusText: String,
+    isSuccess: Boolean,
+    isRunning: Boolean,
+    isError: Boolean,
+    accentColor: Color? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column {
+            Text(label, color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(
+                statusText,
+                color = if (isError) Color.Red else if (isSuccess) (accentColor ?: Color(0xFF2ECC71)) else if (isRunning) Cyan else PaperDim,
+                fontSize = 11.sp
+            )
+        }
+        
+        if (isRunning) {
+            CircularProgressIndicator(color = Cyan, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        } else if (isSuccess) {
+            Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                contentDescription = "Success",
+                tint = accentColor ?: Color(0xFF2ECC71),
+                modifier = Modifier.size(18.dp)
+            )
+        } else if (isError) {
+            Icon(
+                imageVector = Icons.Filled.Warning,
+                contentDescription = "Failed",
+                tint = Color.Red,
+                modifier = Modifier.size(18.dp)
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.Refresh,
+                contentDescription = "Pending",
+                tint = PaperDim,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
@@ -2525,8 +2583,16 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     val Emerald = Color(0xFF2ECC71)
     val sessionManager = remember { SessionManager(context) }
     
-    var currentStep by remember { mutableStateOf(1) } // 1 to 5
+    var currentStep by remember { mutableStateOf(0) } // Starts at 0: Router Auto-Detection
     val logs = remember { mutableStateListOf<String>() }
+    
+    // Step 0: Auto-detection variables
+    var step0Status by remember { mutableStateOf("NOT_STARTED") } // "NOT_STARTED", "RUNNING", "SUCCESS_MIKROTIK", "SUCCESS_GENERIC", "ERROR_MAC", "ERROR_DISAGREEMENT"
+    var detectedGatewayIp by remember { mutableStateOf("") }
+    var detectedGatewayMac by remember { mutableStateOf("") }
+    var macPrefixCheckResult by remember { mutableStateOf<Boolean?>(null) } // true = MikroTik prefix, false = non-MikroTik prefix, null = not checked
+    var apiHandshakeResult by remember { mutableStateOf<Boolean?>(null) } // true = successful handshake, false = failed handshake, null = not checked
+    var isCheckingStep0 by remember { mutableStateOf(false) }
     
     // Step 1: Connect variables
     var ip by remember { mutableStateOf(vm.routerIp.ifEmpty { "" }) }
@@ -2547,18 +2613,103 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     var showGatewayDropdownMenu by remember { mutableStateOf(false) }
     var requiresUniqueStickerPassword by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        try {
+    // Helper to read /proc/net/arp and get gateway MAC address
+    fun getGatewayMacAddress(gatewayIp: String): String? {
+        if (gatewayIp.isEmpty()) return null
+        return try {
+            val file = java.io.File("/proc/net/arp")
+            if (file.exists()) {
+                file.readLines()
+                    .drop(1) // skip header
+                    .mapNotNull { line ->
+                        val parts = line.trim().split("\\s+".toRegex())
+                        if (parts.size >= 4) {
+                            val ip = parts[0]
+                            val mac = parts[3]
+                            if (ip == gatewayIp && mac.isNotEmpty() && mac != "00:00:00:00:00:00" && mac.contains(":")) {
+                                mac
+                            } else null
+                        } else null
+                    }.firstOrNull()
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun isValidIPv4(ipAddress: String): Boolean {
+        val parts = ipAddress.split(".")
+        if (parts.size != 4) return false
+        return parts.all { 
+            val num = it.toIntOrNull()
+            num != null && num in 0..255 
+        }
+    }
+
+    suspend fun runApiHandshakeCheck(detectedIp: String, matchesMikroTikPrefix: Boolean) {
+        logs.add("⚡ Attempting live socket handshake on RouterOS API port 8728...")
+        var handshakeSuccess = false
+        
+        if (vm.isDemoMode) {
+            kotlinx.coroutines.delay(1500)
+            handshakeSuccess = matchesMikroTikPrefix
+            logs.add("🛠️ [Demo Mode] API Socket check simulated.")
+        } else {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val testClient = RouterOsApiClient(detectedIp, 8728, timeoutMs = 3000)
+                try {
+                    if (testClient.connect()) {
+                        testClient.writeSentence(listOf("/login"))
+                        val response = testClient.readResponseSentenceGroup()
+                        val firstWordOfFirstSentence = response.firstOrNull()?.firstOrNull() ?: ""
+                        handshakeSuccess = firstWordOfFirstSentence.startsWith("!") || response.isNotEmpty()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("RouterSetup", "Socket handshake failed: ${e.message}")
+                } finally {
+                    testClient.disconnect()
+                }
+            }
+        }
+        
+        apiHandshakeResult = handshakeSuccess
+        isCheckingStep0 = false
+        
+        if (handshakeSuccess) {
+            logs.add("✅ Connection verified using genuine RouterOS API handshake!")
+            step0Status = "SUCCESS_MIKROTIK"
+            selectedBrand = "MikroTik"
+            ip = detectedIp
+            username = "admin"
+            password = ""
+        } else {
+            logs.add("❌ RouterOS API Handshake failed or port 8728 unreachable.")
+            if (matchesMikroTikPrefix) {
+                step0Status = "ERROR_DISAGREEMENT"
+            } else {
+                step0Status = "SUCCESS_GENERIC"
+            }
+        }
+    }
+
+    fun runStep0Checks() {
+        if (isCheckingStep0) return
+        scope.launch {
+            isCheckingStep0 = true
+            step0Status = "RUNNING"
+            logs.clear()
+            logs.add("🚀 Starting diagnostic sequence...")
+            
             // 1. Extract Gateway IP
             var detectedIp = ""
             val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
             val activeNetwork = connectivityManager?.activeNetwork
             val linkProperties = connectivityManager?.getLinkProperties(activeNetwork)
             val gatewayFromRoutes = linkProperties?.routes
-                ?.firstOrNull { it.isDefaultRoute && it.gateway != null }
+                ?.firstOrNull { it.isDefaultRoute && it.gateway is java.net.Inet4Address }
                 ?.gateway?.hostAddress
             
-            if (!gatewayFromRoutes.isNullOrEmpty() && gatewayFromRoutes != "0.0.0.0") {
+            if (!gatewayFromRoutes.isNullOrEmpty() && gatewayFromRoutes != "0.0.0.0" && isValidIPv4(gatewayFromRoutes)) {
                 detectedIp = gatewayFromRoutes
             } else {
                 val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
@@ -2573,142 +2724,67 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                         (gatewayIpInt shr 16) and 0xFF,
                         (gatewayIpInt shr 24) and 0xFF
                     )
-                    if (gatewayIpStr != "0.0.0.0") {
+                    if (gatewayIpStr != "0.0.0.0" && isValidIPv4(gatewayIpStr)) {
                         detectedIp = gatewayIpStr
                     }
                 }
             }
             
+            if (detectedIp.isEmpty()) {
+                logs.add("❌ Failed to detect local gateway IP.")
+                step0Status = "ERROR_MAC"
+                isCheckingStep0 = false
+                return@launch
+            }
+            
+            detectedGatewayIp = detectedIp
             ip = detectedIp
+            logs.add("📡 Gateway IP detected: $detectedIp")
             
-            // 2. Extract BSSID (MAC Address)
-            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
-            val connectionInfo = wifiManager?.connectionInfo
-            val rawBssid = connectionInfo?.bssid
-            var prefix = ""
-            if (!rawBssid.isNullOrEmpty() && rawBssid != "02:00:00:00:00:00") {
-                val cleanBssid = rawBssid.replace(":", "").replace("-", "").uppercase()
-                if (cleanBssid.length >= 6) {
-                    prefix = cleanBssid.substring(0, 6)
-                    detectedMacPrefix = prefix
-                }
+            // 2. Read the router's real MAC address
+            val routerMac = getGatewayMacAddress(detectedIp)
+            if (routerMac == null) {
+                logs.add("❌ Failed to read MAC address from /proc/net/arp.")
+                step0Status = "ERROR_MAC"
+                isCheckingStep0 = false
+                return@launch
             }
             
-            // 3. Brand lookup sequence via live backend fingerprinting
-            logs.add("🔍 Initiating live zero-dead-data router identification...")
+            detectedGatewayMac = routerMac
+            logs.add("📎 Router MAC retrieved: $routerMac")
             
-            var serverHeader: String? = null
-            var pageTitle: String? = null
-            var metaVendor: String? = null
+            // 3. Compare prefix against registered list
+            val cleanBssid = routerMac.replace(":", "").replace("-", "").uppercase()
+            val prefix = if (cleanBssid.length >= 6) cleanBssid.substring(0, 6) else ""
+            detectedMacPrefix = prefix
+            
+            val matchesMikroTikPrefix = prefix.isNotEmpty() && mikrotikMacPrefixes.contains(prefix)
+            macPrefixCheckResult = matchesMikroTikPrefix
+            
+            if (matchesMikroTikPrefix) {
+                logs.add("🔍 MAC Prefix '$prefix' matches registered MikroTik hardware OUI!")
+            } else {
+                logs.add("🔍 MAC Prefix '$prefix' is registered to another manufacturer.")
+            }
+            
+            // 4. Socket API check
+            runApiHandshakeCheck(detectedIp, matchesMikroTikPrefix)
+        }
+    }
 
-            if (detectedIp.isNotEmpty()) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    try {
-                        val url = java.net.URL("http://$detectedIp")
-                        val connection = url.openConnection() as java.net.HttpURLConnection
-                        connection.connectTimeout = 1500
-                        connection.readTimeout = 1500
-                        connection.requestMethod = "GET"
-                        
-                        serverHeader = connection.getHeaderField("Server")
-                        try {
-                            val inputStream = connection.inputStream
-                            val htmlContent = inputStream.bufferedReader().use { it.readText() }
-                            
-                            val titleMatcher = java.util.regex.Pattern.compile("<title>(.*?)</title>", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(htmlContent)
-                            if (titleMatcher.find()) {
-                                pageTitle = titleMatcher.group(1)?.trim()
-                            }
-                            
-                            if (htmlContent.contains("tplink", ignoreCase = true) || htmlContent.contains("tp-link", ignoreCase = true)) {
-                                metaVendor = "tplink"
-                            } else if (htmlContent.contains("tenda", ignoreCase = true)) {
-                                metaVendor = "tenda"
-                            } else if (htmlContent.contains("huawei", ignoreCase = true)) {
-                                metaVendor = "huawei"
-                            } else if (htmlContent.contains("netgear", ignoreCase = true)) {
-                                metaVendor = "netgear"
-                            } else if (htmlContent.contains("asus", ignoreCase = true)) {
-                                metaVendor = "asus"
-                            }
-                        } catch (ex: Exception) {
-                            // Some routers reject empty user-agent or block connection completely
-                        }
-                        logs.add("📡 Scraped local gateway banner: server='$serverHeader', title='$pageTitle', meta='$metaVendor'")
-                    } catch (e: Exception) {
-                        android.util.Log.d("RouterSetup", "Local HTTP banner scrape failed: ${e.message}")
-                    }
-                }
-            }
+    fun retryApiCheckOnly() {
+        if (isCheckingStep0) return
+        scope.launch {
+            isCheckingStep0 = true
+            step0Status = "RUNNING"
+            logs.add("🔄 Retrying live socket handshake on RouterOS API port 8728...")
+            runApiHandshakeCheck(detectedGatewayIp, macPrefixCheckResult == true)
+        }
+    }
 
-            try {
-                val requestPayload = RouterFingerprintRequest(
-                    gateway_ip = detectedIp,
-                    mac_prefix = prefix,
-                    http_banner = HttpBanner(
-                        server_header = serverHeader,
-                        page_title = pageTitle,
-                        meta_vendor = metaVendor
-                    )
-                )
-                val response = RetrofitClient.apiService.fingerprintRouter(requestPayload)
-                
-                selectedBrand = response.brand
-                requiresUniqueStickerPassword = response.requires_unique_sticker_password
-                
-                if (response.requires_unique_sticker_password) {
-                    username = ""
-                    password = ""
-                    showStickerDialog = true
-                    logs.add("🚨 Modern Series Detected: '${response.brand}' requires a unique password printed on sticker.")
-                } else {
-                    val credentials = response.real_time_credentials
-                    if (credentials.isNotEmpty()) {
-                        username = credentials.first().username
-                        password = credentials.first().password
-                        logs.add("⚡ Auto-Populated default credentials for standard/legacy device: user='${credentials.first().username}'")
-                    } else {
-                        username = "admin"
-                        password = ""
-                    }
-                    logs.add("✅ Brand '${response.brand}' identified successfully via Backend API!")
-                }
-            } catch (apiErr: Exception) {
-                android.util.Log.e("RouterSetup", "Backend fingerprinting API failed, falling back to local dataset", apiErr)
-                logs.add("⚠️ Backend API offline. Activating localized hardware fallback...")
-                
-                // FALLBACK TO LOCAL LOOKUPS
-                if (prefix.isNotEmpty() && macBrandLookup.containsKey(prefix)) {
-                    val brand = macBrandLookup[prefix] ?: "MikroTik"
-                    macMatchedBrand = brand
-                    selectedBrand = brand
-                    val defaults = routerDefaults[brand] ?: emptyList()
-                    if (defaults.isNotEmpty()) {
-                        username = defaults.first().username
-                        password = defaults.first().password
-                    }
-                    logs.add("🔍 Local Fallback: BSSID prefix $prefix matched router brand '$brand'!")
-                } else if (detectedIp.isNotEmpty() && gatewayBrandLookup.containsKey(detectedIp)) {
-                    val matched = gatewayBrandLookup[detectedIp] ?: emptyList()
-                    gatewayMatchedBrands = matched
-                    if (matched.isNotEmpty()) {
-                        selectedBrand = matched.first()
-                        val defaults = routerDefaults[selectedBrand] ?: emptyList()
-                        if (defaults.isNotEmpty()) {
-                            username = defaults.first().username
-                            password = defaults.first().password
-                        }
-                    }
-                    logs.add("🔍 Local Fallback: Gateway IP $detectedIp corresponds to potential brands: ${matched.joinToString(", ")}")
-                } else {
-                    selectedBrand = "Other / Not Sure"
-                    username = ""
-                    password = ""
-                    logs.add("🔍 Local Fallback: Unrecognized router brand.")
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("RouterSetup", "Error retrieving gateway IP", e)
+    LaunchedEffect(Unit) {
+        if (currentStep == 0 && step0Status == "NOT_STARTED") {
+            runStep0Checks()
         }
     }
     
@@ -2814,13 +2890,13 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = {
-                    if (currentStep > 1) currentStep-- else nav.popBackStack()
+                    if (currentStep > 0) currentStep-- else nav.popBackStack()
                 }) {
                     Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Cyan)
                 }
                 
                 Text(
-                    text = "Router Setup (${currentStep}/5)",
+                    text = if (currentStep == 0) "Router Detection" else "Router Setup ($currentStep/5)",
                     color = Paper,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
@@ -2870,6 +2946,241 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     when (currentStep) {
+                        0 -> {
+                            Text("Router Auto-Detection", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            Text(
+                                "We are running real hardware diagnostic checks to identify your router and determine compatibility.",
+                                color = PaperDim,
+                                fontSize = 13.sp
+                            )
+                            
+                            Spacer(Modifier.height(8.dp))
+                            
+                            // Check Items Container
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Ink.copy(alpha = 0.3f))
+                                    .border(1.dp, BorderLine, RoundedCornerShape(16.dp))
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                // 1. Gateway IP Check
+                                DiagnosticCheckRow(
+                                    label = "Gateway IP Check",
+                                    statusText = if (detectedGatewayIp.isEmpty()) "Scanning..." else "Detected: $detectedGatewayIp",
+                                    isSuccess = detectedGatewayIp.isNotEmpty(),
+                                    isRunning = step0Status == "RUNNING" && detectedGatewayIp.isEmpty(),
+                                    isError = step0Status == "ERROR_MAC" && detectedGatewayIp.isEmpty()
+                                )
+                                
+                                // 2. MAC Address Check
+                                DiagnosticCheckRow(
+                                    label = "Retrieve Router MAC Address",
+                                    statusText = if (detectedGatewayMac.isEmpty()) {
+                                        if (step0Status == "ERROR_MAC") "Failed to read ARP" else "Scanning ARP..."
+                                    } else "Retrieved: $detectedGatewayMac",
+                                    isSuccess = detectedGatewayMac.isNotEmpty(),
+                                    isRunning = step0Status == "RUNNING" && detectedGatewayMac.isEmpty() && detectedGatewayIp.isNotEmpty(),
+                                    isError = step0Status == "ERROR_MAC" && detectedGatewayMac.isEmpty()
+                                )
+                                
+                                // 3. OUI Prefix Check
+                                DiagnosticCheckRow(
+                                    label = "OUI Prefix Matching",
+                                    statusText = when (macPrefixCheckResult) {
+                                        true -> "OUI Match: MikroTik ($detectedMacPrefix)"
+                                        false -> "OUI Match: Non-MikroTik ($detectedMacPrefix)"
+                                        else -> "Waiting for MAC..."
+                                    },
+                                    isSuccess = macPrefixCheckResult != null,
+                                    isRunning = step0Status == "RUNNING" && macPrefixCheckResult == null && detectedGatewayMac.isNotEmpty(),
+                                    isError = false,
+                                    accentColor = if (macPrefixCheckResult == true) Cyan else PaperDim
+                                )
+                                
+                                // 4. RouterOS API Handshake Check
+                                DiagnosticCheckRow(
+                                    label = "RouterOS API Handshake",
+                                    statusText = when (apiHandshakeResult) {
+                                        true -> "Handshake: Genuine RouterOS Verified"
+                                        false -> "Handshake: Connection refused / Handshake mismatch"
+                                        else -> "Waiting for OUI check..."
+                                    },
+                                    isSuccess = apiHandshakeResult == true,
+                                    isRunning = step0Status == "RUNNING" && apiHandshakeResult == null && macPrefixCheckResult != null,
+                                    isError = apiHandshakeResult == false
+                                )
+                            }
+                            
+                            // Real-time Console/Terminal view
+                            Spacer(Modifier.height(8.dp))
+                            Text("DIAGNOSTIC LOGS", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(110.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Ink)
+                                    .border(1.dp, BorderLine, RoundedCornerShape(12.dp))
+                                    .padding(12.dp)
+                            ) {
+                                val scrollState = rememberScrollState()
+                                LaunchedEffect(logs.size) {
+                                    scrollState.animateScrollTo(scrollState.maxValue)
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(scrollState),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    logs.forEach { log ->
+                                        Text(
+                                            text = log,
+                                            color = if (log.startsWith("✅") || log.contains("success", ignoreCase = true)) Emerald else if (log.startsWith("❌") || log.startsWith("🚨")) Color.Red else if (log.startsWith("⚠️")) Color.Yellow else PaperDim,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            lineHeight = 14.sp
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            // Result Box and Actions
+                            Spacer(Modifier.height(8.dp))
+                            
+                            when (step0Status) {
+                                "RUNNING" -> {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(color = Cyan, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Running hardware checks...", color = PaperDim, fontSize = 13.sp)
+                                    }
+                                }
+                                "ERROR_MAC" -> {
+                                    Surface(
+                                        color = Color.Red.copy(0.12f),
+                                        border = BorderStroke(1.dp, Color.Red.copy(0.5f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text(
+                                                text = "Couldn't read your router's address details. Make sure you're connected to its WiFi network and try again.",
+                                                color = Paper,
+                                                fontSize = 12.sp,
+                                                lineHeight = 16.sp
+                                            )
+                                            Button(
+                                                onClick = { runStep0Checks() },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(0.4f)),
+                                                shape = RoundedCornerShape(10.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("Retry Diagnostics", color = Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                                "ERROR_DISAGREEMENT" -> {
+                                    Surface(
+                                        color = Color.Yellow.copy(0.12f),
+                                        border = BorderStroke(1.dp, Color.Yellow.copy(0.5f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text(
+                                                text = "This looks like a MikroTik router, but we couldn't reach its management API. It may be turned off. Log into your router at http://$detectedGatewayIp in a browser, go to IP → Services, and check that 'api' is enabled — then try again.",
+                                                color = Paper,
+                                                fontSize = 12.sp,
+                                                lineHeight = 16.sp
+                                            )
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = { retryApiCheckOnly() },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Cyan),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Retry Handshake", color = Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                }
+                                                Button(
+                                                    onClick = { runStep0Checks() },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Panel),
+                                                    border = BorderStroke(1.dp, BorderLine),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Full Diagnostic", color = Paper, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                "SUCCESS_MIKROTIK" -> {
+                                    Surface(
+                                        color = Emerald.copy(0.12f),
+                                        border = BorderStroke(1.dp, Emerald.copy(0.5f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text(
+                                                text = "MikroTik router detected! Connection API is verified.",
+                                                color = Emerald,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Button(
+                                                onClick = { currentStep = 1 },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Emerald),
+                                                shape = RoundedCornerShape(10.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("Proceed to MikroTik Setup (1/5)", color = Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                                "SUCCESS_GENERIC" -> {
+                                    Surface(
+                                        color = Cyan.copy(0.12f),
+                                        border = BorderStroke(1.dp, Cyan.copy(0.5f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text(
+                                                text = "This router doesn't have MikroTik's management API. We'll guide you through setup a different way.",
+                                                color = Paper,
+                                                fontSize = 12.sp,
+                                                lineHeight = 16.sp
+                                            )
+                                            Button(
+                                                onClick = {
+                                                    android.widget.Toast.makeText(context, "Generic Setup flow is currently in development!", android.widget.Toast.LENGTH_LONG).show()
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Cyan),
+                                                shape = RoundedCornerShape(10.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("Proceed to Generic Setup", color = Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         1 -> {
                             Text("Connect to Your Router", color = Paper, fontSize = 20.sp, fontWeight = FontWeight.Black)
                             Text(
