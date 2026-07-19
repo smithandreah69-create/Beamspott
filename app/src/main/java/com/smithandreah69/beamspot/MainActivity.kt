@@ -2445,6 +2445,110 @@ class RouterOsApiClient(
     }
 }
 
+fun ipInSubnet(ip: List<Int>, subnetIp: List<Int>, mask: Int): Boolean {
+    try {
+        val ipVal = (ip[0] shl 24) or (ip[1] shl 16) or (ip[2] shl 8) or ip[3]
+        val subnetVal = (subnetIp[0] shl 24) or (subnetIp[1] shl 16) or (subnetIp[2] shl 8) or subnetIp[3]
+        val shift = 32 - mask
+        if (shift <= 0) return ipVal == subnetVal
+        val netmask = (0xFFFFFFFF.toLong() shl shift).toInt()
+        return (ipVal and netmask) == (subnetVal and netmask)
+    } catch (e: Exception) {
+        return false
+    }
+}
+
+fun findInterfaceForIp(gatewayIp: String, addresses: List<List<String>>): String? {
+    try {
+        val gwParts = gatewayIp.split(".").map { it.toInt() }
+        if (gwParts.size != 4) return null
+        
+        for (addrEntry in addresses) {
+            val address = addrEntry.find { it.startsWith("=address=") || it.startsWith("address=") }?.substringAfter("=") ?: ""
+            val iface = addrEntry.find { it.startsWith("=interface=") || it.startsWith("interface=") }?.substringAfter("=") ?: ""
+            if (address.isNotEmpty() && iface.isNotEmpty() && address.contains("/")) {
+                val ipPart = address.substringBefore("/")
+                val maskPart = address.substringAfter("/").toIntOrNull() ?: 24
+                
+                val ipParts = ipPart.split(".").map { it.toInt() }
+                if (ipParts.size == 4) {
+                    if (ipInSubnet(gwParts, ipParts, maskPart)) {
+                        return iface
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        // Safe fallback
+    }
+    return null
+}
+
+fun determineWanInterface(routes: List<List<String>>, addresses: List<List<String>>, dhcpClients: List<List<String>>): String? {
+    for (route in routes) {
+        val dstAddress = route.find { it.startsWith("=dst-address=") || it.startsWith("dst-address=") }?.substringAfter("=") ?: ""
+        if (dstAddress == "0.0.0.0/0") {
+            val immediateGateway = route.find { it.startsWith("=immediate-gateway=") || it.startsWith("immediate-gateway=") }?.substringAfter("=") ?: ""
+            if (immediateGateway.isNotEmpty() && !immediateGateway.matches(Regex("^[0-9.]+$"))) {
+                val clean = immediateGateway.split(",").firstOrNull()?.trim()
+                if (!clean.isNullOrEmpty()) return clean
+            }
+            
+            val gatewayStatus = route.find { it.startsWith("=gateway-status=") || it.startsWith("gateway-status=") }?.substringAfter("=") ?: ""
+            if (gatewayStatus.isNotEmpty()) {
+                if (gatewayStatus.contains("via ")) {
+                    val iface = gatewayStatus.substringAfter("via ").trim().split("\\s+".toRegex()).firstOrNull()
+                    if (!iface.isNullOrEmpty()) return iface
+                }
+                if (gatewayStatus.contains(" reachable")) {
+                    val iface = gatewayStatus.substringBefore(" reachable").trim().split("\\s+".toRegex()).lastOrNull()
+                    if (!iface.isNullOrEmpty()) return iface
+                }
+            }
+            
+            val gateway = route.find { it.startsWith("=gateway=") || it.startsWith("gateway=") }?.substringAfter("=") ?: ""
+            if (gateway.isNotEmpty()) {
+                if (!gateway.matches(Regex("^[0-9.]+$"))) {
+                    val clean = gateway.split(",").firstOrNull()?.trim()
+                    if (!clean.isNullOrEmpty()) return clean
+                } else {
+                    val matchedIface = findInterfaceForIp(gateway, addresses)
+                    if (matchedIface != null) return matchedIface
+                }
+            }
+        }
+    }
+    
+    for (client in dhcpClients) {
+        val iface = client.find { it.startsWith("=interface=") || it.startsWith("interface=") }?.substringAfter("=") ?: ""
+        if (iface.isNotEmpty()) return iface
+    }
+    return null
+}
+
+fun isInterfaceRunning(ifaceName: String, interfaces: List<List<String>>): Boolean {
+    val ifaceEntry = interfaces.find { entry ->
+        val name = entry.find { it.startsWith("=name=") || it.startsWith("name=") }?.substringAfter("=") ?: ""
+        name == ifaceName
+    }
+    if (ifaceEntry != null) {
+        val running = ifaceEntry.find { it.startsWith("=running=") || it.startsWith("running=") }?.substringAfter("=") ?: ""
+        return running == "true" || running == "yes"
+    }
+    return false
+}
+
+fun hasAssignedIp(ifaceName: String, addresses: List<List<String>>): Boolean {
+    for (addrEntry in addresses) {
+        val iface = addrEntry.find { it.startsWith("=interface=") || it.startsWith("interface=") }?.substringAfter("=") ?: ""
+        val address = addrEntry.find { it.startsWith("=address=") || it.startsWith("address=") }?.substringAfter("=") ?: ""
+        if (iface == ifaceName && address.isNotEmpty() && !address.startsWith("0.0.0.0")) {
+            return true
+        }
+    }
+    return false
+}
+
 // ─── 5-STEP ROUTER SETUP WIZARD SCREEN ─────────────────────────────────────
 data class RouterDefault(val username: String, val password: String)
 
@@ -2825,6 +2929,9 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     // Step 2: WAN check variables
     var isCheckingWan by remember { mutableStateOf(false) }
     var wanConfirmed by remember { mutableStateOf(false) }
+    var wanCheckStatusText by remember { mutableStateOf("Checking your router's internet connection...") }
+    var wanCheckStatusType by remember { mutableStateOf("RUNNING") } // "RUNNING", "SUCCESS", "NO_ROUTE", "NOT_RUNNING", "NO_IP", "CONNECT_FAILED", "RECONNECTING"
+    var wanCheckIfaceName by remember { mutableStateOf("") }
     
     // Step 3: Broadcast variables
     var ssid by remember { mutableStateOf(vm.routerGuestSsid.ifEmpty { "BeamSpot_WiFi" }) }
@@ -2870,6 +2977,126 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 logs.add("\n--- Step 5: Live Guest Verification ---")
                 logs.add("The portal is fully configured on your router! Waiting for a second device to join...")
                 isPollingGuests = true
+            }
+        }
+    }
+
+    LaunchedEffect(currentStep) {
+        if (currentStep == 2) {
+            wanConfirmed = false
+            wanCheckStatusText = "Checking your router's internet connection..."
+            wanCheckStatusType = "RUNNING"
+            wanCheckIfaceName = ""
+            var reconnectAttempts = 0
+            
+            while (currentStep == 2) {
+                if (vm.isDemoMode) {
+                    delay(2000)
+                    wanCheckIfaceName = "ether1 (Demo)"
+                    wanConfirmed = true
+                    wanCheckStatusType = "SUCCESS"
+                    wanCheckStatusText = "Internet connection confirmed on ether1 (Demo)"
+                    delay(2000)
+                    currentStep = 3
+                    break
+                }
+                
+                val conn = sessionManager.getRouterConnection()
+                val currentIp = conn?.ip ?: ip
+                val currentPort = conn?.port ?: (port.toIntOrNull() ?: 8728)
+                val currentUsername = conn?.username ?: username
+                val currentPassword = conn?.password ?: password
+                
+                val apiResult = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val clientTemp = RouterOsApiClient(currentIp, currentPort)
+                    try {
+                        if (!clientTemp.connect()) {
+                            return@withContext Pair("CONNECT_FAILED", "Could not establish TCP connection to $currentIp:$currentPort")
+                        }
+                        val loginRes = clientTemp.login(currentUsername, currentPassword)
+                        if (!loginRes.first) {
+                            return@withContext Pair("CONNECT_FAILED", "Authentication failed for user $currentUsername: ${loginRes.second}")
+                        }
+                        
+                        // 1. Query routes, addresses, and DHCP clients to find the WAN interface
+                        clientTemp.writeSentence(listOf("/ip/route/print"))
+                        val routes = clientTemp.readResponseSentenceGroup()
+                        
+                        clientTemp.writeSentence(listOf("/ip/address/print"))
+                        val addresses = clientTemp.readResponseSentenceGroup()
+                        
+                        clientTemp.writeSentence(listOf("/ip/dhcp-client/print"))
+                        val dhcpClients = clientTemp.readResponseSentenceGroup()
+                        
+                        val parsedWanIface = determineWanInterface(routes, addresses, dhcpClients)
+                        if (parsedWanIface == null) {
+                            return@withContext Pair("NO_ROUTE", "")
+                        }
+                        
+                        // 2. Query interface list to check running/link status
+                        clientTemp.writeSentence(listOf("/interface/print"))
+                        val interfaces = clientTemp.readResponseSentenceGroup()
+                        val running = isInterfaceRunning(parsedWanIface, interfaces)
+                        if (!running) {
+                            return@withContext Pair("NOT_RUNNING", parsedWanIface)
+                        }
+                        
+                        // 3. Check if the interface has an assigned IP address
+                        val hasIp = hasAssignedIp(parsedWanIface, addresses)
+                        if (!hasIp) {
+                            return@withContext Pair("NO_IP", parsedWanIface)
+                        }
+                        
+                        Pair("SUCCESS", parsedWanIface)
+                    } catch (e: Exception) {
+                        Pair("CONNECT_FAILED", e.localizedMessage ?: "Unknown API error")
+                    } finally {
+                        clientTemp.disconnect()
+                    }
+                }
+                
+                when (apiResult.first) {
+                    "SUCCESS" -> {
+                        reconnectAttempts = 0
+                        wanCheckIfaceName = apiResult.second
+                        wanConfirmed = true
+                        wanCheckStatusType = "SUCCESS"
+                        wanCheckStatusText = "Internet connection confirmed on ${apiResult.second}"
+                        delay(2000)
+                        currentStep = 3
+                        break
+                    }
+                    "NO_ROUTE" -> {
+                        reconnectAttempts = 0
+                        wanCheckStatusType = "NO_ROUTE"
+                        wanCheckStatusText = "Your router doesn't have an internet connection configured. Check its WAN/internet cable or your ISP connection, then this will update automatically."
+                    }
+                    "NOT_RUNNING" -> {
+                        reconnectAttempts = 0
+                        wanCheckStatusType = "NOT_RUNNING"
+                        wanCheckStatusText = "Your router's internet connection appears to be down. Check the physical cable/connection to your router, then this will update automatically."
+                    }
+                    "NO_IP" -> {
+                        reconnectAttempts = 0
+                        wanCheckStatusType = "NO_IP"
+                        wanCheckStatusText = "Your router's internet interface isn't fully connected yet (no IP address received). This can take a moment after plugging in — checking again automatically."
+                    }
+                    "CONNECT_FAILED" -> {
+                        reconnectAttempts++
+                        if (reconnectAttempts >= 3) {
+                            wanCheckStatusType = "GOTO_DETECTION"
+                            wanCheckStatusText = "Lost connection to your router. Reconnecting..."
+                            delay(2000)
+                            currentStep = 0
+                            break
+                        } else {
+                            wanCheckStatusType = "RECONNECTING"
+                            wanCheckStatusText = "Lost connection to your router. Reconnecting... (Attempt $reconnectAttempts of 3)"
+                        }
+                    }
+                }
+                
+                delay(2000)
             }
         }
     }
@@ -3895,88 +4122,107 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                             
                             Spacer(Modifier.height(16.dp))
                             
+                            // Status Card
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(if (wanConfirmed) Emerald.copy(0.1f) else Panel)
-                                    .border(1.dp, if (wanConfirmed) Emerald else BorderLine, RoundedCornerShape(16.dp))
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
+                                    .background(if (wanConfirmed) Emerald.copy(0.1f) else if (wanCheckStatusType.contains("FAILED") || wanCheckStatusType.contains("RECONNECTING")) Color.Red.copy(0.1f) else Panel)
+                                    .border(1.dp, if (wanConfirmed) Emerald else if (wanCheckStatusType.contains("FAILED") || wanCheckStatusType.contains("RECONNECTING")) Color.Red else BorderLine, RoundedCornerShape(16.dp))
+                                    .padding(20.dp)
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        imageVector = if (wanConfirmed) Icons.Filled.CheckCircle else Icons.Filled.Language,
-                                        contentDescription = null,
-                                        tint = if (wanConfirmed) Emerald else Cyan,
-                                        modifier = Modifier.size(54.dp)
-                                    )
-                                    Spacer(Modifier.height(12.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        if (wanCheckStatusType == "RUNNING" || wanCheckStatusType == "RECONNECTING") {
+                                            CircularProgressIndicator(
+                                                color = Cyan,
+                                                modifier = Modifier.size(24.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else if (wanConfirmed) {
+                                            Icon(
+                                                imageVector = Icons.Filled.CheckCircle,
+                                                contentDescription = "Success",
+                                                tint = Emerald,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Filled.Warning,
+                                                contentDescription = "Warning",
+                                                tint = Color.Red,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                        
+                                        Text(
+                                            text = if (wanConfirmed) "Uplink Confirmed!" else if (wanCheckStatusType == "RECONNECTING") "Reconnecting to Router..." else "Pending Uplink Check",
+                                            color = if (wanConfirmed) Emerald else if (wanCheckStatusType.contains("FAILED") || wanCheckStatusType.contains("RECONNECTING")) Color.Red else Paper,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                    }
+                                    
                                     Text(
-                                        text = if (wanConfirmed) "Uplink Confirmed!" else "Pending Uplink Check",
-                                        color = if (wanConfirmed) Emerald else Paper,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                    Text(
-                                        text = if (wanConfirmed) "The router successfully reached Google DNS" else "Click the button below to execute ping command",
+                                        text = wanCheckStatusText,
                                         color = PaperDim,
-                                        fontSize = 12.sp,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.padding(top = 4.dp)
+                                        fontSize = 13.sp,
+                                        lineHeight = 18.sp
                                     )
                                 }
+                            }
+                            
+                            Spacer(Modifier.height(16.dp))
+                            
+                            // Checklist panel (like Step 0)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Panel)
+                                    .border(1.dp, BorderLine, RoundedCornerShape(16.dp))
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                // 1. Identify WAN Interface
+                                DiagnosticCheckRow(
+                                    label = "Identify WAN Interface",
+                                    statusText = if (wanCheckStatusType == "NO_ROUTE") "No default route found" else if (wanCheckIfaceName.isNotEmpty()) "Found interface: $wanCheckIfaceName" else "Identifying WAN interface...",
+                                    isSuccess = wanCheckIfaceName.isNotEmpty(),
+                                    isRunning = (wanCheckStatusType == "RUNNING" || wanCheckStatusType == "RECONNECTING") && wanCheckIfaceName.isEmpty(),
+                                    isError = wanCheckStatusType == "NO_ROUTE"
+                                )
+                                
+                                // 2. Verify Link Physical Connection
+                                DiagnosticCheckRow(
+                                    label = "Verify Link Physical Connection",
+                                    statusText = if (wanCheckStatusType == "NOT_RUNNING") "No physical connection (not running)" else if (wanCheckStatusType == "SUCCESS" || wanCheckStatusType == "NO_IP") "Link Active" else if (wanCheckIfaceName.isEmpty()) "Waiting for interface..." else "Checking link status...",
+                                    isSuccess = wanCheckStatusType == "SUCCESS" || wanCheckStatusType == "NO_IP" || wanConfirmed,
+                                    isRunning = (wanCheckStatusType == "RUNNING" || wanCheckStatusType == "RECONNECTING") && wanCheckIfaceName.isNotEmpty() && !wanConfirmed,
+                                    isError = wanCheckStatusType == "NOT_RUNNING"
+                                )
+                                
+                                // 3. Obtain Internet IP Address
+                                DiagnosticCheckRow(
+                                    label = "Obtain Internet IP Address",
+                                    statusText = if (wanCheckStatusType == "NO_IP") "No IP address assigned" else if (wanCheckStatusType == "SUCCESS") "IP address assigned" else if (wanCheckStatusType == "NOT_RUNNING") "Waiting for active link..." else if (wanCheckIfaceName.isEmpty()) "Waiting for interface..." else "Verifying IP address...",
+                                    isSuccess = wanCheckStatusType == "SUCCESS" || wanConfirmed,
+                                    isRunning = (wanCheckStatusType == "RUNNING" || wanCheckStatusType == "RECONNECTING" || wanCheckStatusType == "NO_IP") && wanCheckStatusType != "NOT_RUNNING" && wanCheckIfaceName.isNotEmpty() && !wanConfirmed,
+                                    isError = wanCheckStatusType == "NO_IP"
+                                )
                             }
                             
                             Spacer(Modifier.weight(1f))
                             
-                            BeamButton(
-                                label = if (isCheckingWan) "Pinging..." else "Check Router Internet Link 🌐",
-                                color = if (wanConfirmed) Emerald else Cyan,
-                                enabled = !isCheckingWan
-                            ) {
-                                isCheckingWan = true
-                                logs.add("Executing WAN ping check address=8.8.8.8 count=2...")
-                                scope.launch {
-                                    delay(1000)
-                                    if (vm.isDemoMode) {
-                                        wanConfirmed = true
-                                        logs.add("PING 8.8.8.8: 56 data bytes")
-                                        logs.add("64 bytes from 8.8.8.8: seq=1 ttl=115 time=14.3 ms")
-                                        logs.add("64 bytes from 8.8.8.8: seq=2 ttl=115 time=15.1 ms")
-                                        logs.add("✅ WAN internet connection is active on the router.")
-                                    } else {
-                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                            if (client.connect()) {
-                                                if (client.login(username, password).first) {
-                                                    val pingRes = client.ping("8.8.8.8")
-                                                    client.disconnect()
-                                                    pingRes
-                                                } else {
-                                                    client.disconnect()
-                                                    Pair(false, "API login expired")
-                                                }
-                                            } else {
-                                                Pair(false, "Socket connect timeout")
-                                            }
-                                        }
-                                        logs.add(result.second)
-                                        if (result.first) {
-                                            wanConfirmed = true
-                                            logs.add("✅ WAN Link confirmed!")
-                                        } else {
-                                            logs.add("❌ WAN ping failed. Verify WAN interface setup in RouterOS.")
-                                        }
-                                    }
-                                    isCheckingWan = false
-                                }
-                            }
-                            
-                            if (wanConfirmed) {
-                                BeamButton("Continue", Cyan) {
-                                    currentStep = 3
-                                }
-                            }
+                            Text(
+                                text = "Polling router status every 2 seconds...",
+                                color = PaperDim.copy(0.5f),
+                                fontSize = 11.sp,
+                                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp)
+                            )
                         }
                         
                         3 -> {
