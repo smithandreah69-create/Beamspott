@@ -145,6 +145,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             prefs.edit().putString("router_password", value).apply()
         }
 
+    init {
+        val sessionManager = SessionManager(application)
+        sessionManager.getRouterConnection()?.let { conn ->
+            _routerIp.value = conn.ip
+            _routerApiPort.value = conn.port.toString()
+            _routerUsername.value = conn.username
+            _routerPassword.value = conn.password
+            prefs.edit()
+                .putString("router_ip", conn.ip)
+                .putString("router_api_port", conn.port.toString())
+                .putString("router_username", conn.username)
+                .putString("router_password", conn.password)
+                .apply()
+        }
+    }
+
     private val _routerHotspotServer = mutableStateOf(prefs.getString("router_hotspot_server", "hs-prof1") ?: "hs-prof1")
     var routerHotspotServer: String
         get() = _routerHotspotServer.value
@@ -485,6 +501,9 @@ data class EarningsRecord(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val sessionManager = SessionManager(this)
+        val conn = sessionManager.getRouterConnection()
+        android.util.Log.d("BeamSpotInit", "Loaded Router Connection from SessionManager on App Start: $conn")
         setContent {
             BeamSpotTheme {
                 BeamSpotApp()
@@ -2532,7 +2551,8 @@ private fun DiagnosticCheckRow(
     isSuccess: Boolean,
     isRunning: Boolean,
     isError: Boolean,
-    accentColor: Color? = null
+    accentColor: Color? = null,
+    isSkipped: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2540,16 +2560,23 @@ private fun DiagnosticCheckRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column {
-            Text(label, color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = if (isSkipped) PaperDim else Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Text(
                 statusText,
-                color = if (isError) Color.Red else if (isSuccess) (accentColor ?: Color(0xFF2ECC71)) else if (isRunning) Cyan else PaperDim,
+                color = if (isSkipped) PaperDim else if (isError) Color.Red else if (isSuccess) (accentColor ?: Color(0xFF2ECC71)) else if (isRunning) Cyan else PaperDim,
                 fontSize = 11.sp
             )
         }
         
         if (isRunning) {
             CircularProgressIndicator(color = Cyan, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        } else if (isSkipped) {
+            Icon(
+                imageVector = Icons.Filled.Remove,
+                contentDescription = "Skipped",
+                tint = PaperDim,
+                modifier = Modifier.size(18.dp)
+            )
         } else if (isSuccess) {
             Icon(
                 imageVector = Icons.Filled.CheckCircle,
@@ -2593,6 +2620,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     var macPrefixCheckResult by remember { mutableStateOf<Boolean?>(null) } // true = MikroTik prefix, false = non-MikroTik prefix, null = not checked
     var apiHandshakeResult by remember { mutableStateOf<Boolean?>(null) } // true = successful handshake, false = failed handshake, null = not checked
     var isCheckingStep0 by remember { mutableStateOf(false) }
+    var macCheckSkipped by remember { mutableStateOf(false) }
     
     // Step 1: Connect variables
     var ip by remember { mutableStateOf(vm.routerIp.ifEmpty { "" }) }
@@ -2696,6 +2724,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
         if (isCheckingStep0) return
         scope.launch {
             isCheckingStep0 = true
+            macCheckSkipped = false
             step0Status = "RUNNING"
             logs.clear()
             logs.add("🚀 Starting diagnostic sequence...")
@@ -2744,31 +2773,36 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
             // 2. Read the router's real MAC address
             val routerMac = getGatewayMacAddress(detectedIp)
             if (routerMac == null) {
-                logs.add("❌ Failed to read MAC address from /proc/net/arp.")
-                step0Status = "ERROR_MAC"
-                isCheckingStep0 = false
-                return@launch
-            }
-            
-            detectedGatewayMac = routerMac
-            logs.add("📎 Router MAC retrieved: $routerMac")
-            
-            // 3. Compare prefix against registered list
-            val cleanBssid = routerMac.replace(":", "").replace("-", "").uppercase()
-            val prefix = if (cleanBssid.length >= 6) cleanBssid.substring(0, 6) else ""
-            detectedMacPrefix = prefix
-            
-            val matchesMikroTikPrefix = prefix.isNotEmpty() && mikrotikMacPrefixes.contains(prefix)
-            macPrefixCheckResult = matchesMikroTikPrefix
-            
-            if (matchesMikroTikPrefix) {
-                logs.add("🔍 MAC Prefix '$prefix' matches registered MikroTik hardware OUI!")
+                logs.add("⚠️ Failed to read MAC address from /proc/net/arp (expected on Android 10+). Skipping MAC and OUI Prefix checks.")
+                macCheckSkipped = true
+                detectedGatewayMac = ""
+                detectedMacPrefix = ""
+                macPrefixCheckResult = null
+                
+                // 4. Socket API check directly
+                runApiHandshakeCheck(detectedIp, false)
             } else {
-                logs.add("🔍 MAC Prefix '$prefix' is registered to another manufacturer.")
+                macCheckSkipped = false
+                detectedGatewayMac = routerMac
+                logs.add("📎 Router MAC retrieved: $routerMac")
+                
+                // 3. Compare prefix against registered list
+                val cleanBssid = routerMac.replace(":", "").replace("-", "").uppercase()
+                val prefix = if (cleanBssid.length >= 6) cleanBssid.substring(0, 6) else ""
+                detectedMacPrefix = prefix
+                
+                val matchesMikroTikPrefix = prefix.isNotEmpty() && mikrotikMacPrefixes.contains(prefix)
+                macPrefixCheckResult = matchesMikroTikPrefix
+                
+                if (matchesMikroTikPrefix) {
+                    logs.add("🔍 MAC Prefix '$prefix' matches registered MikroTik hardware OUI!")
+                } else {
+                    logs.add("🔍 MAC Prefix '$prefix' is registered to another manufacturer.")
+                }
+                
+                // 4. Socket API check
+                runApiHandshakeCheck(detectedIp, matchesMikroTikPrefix)
             }
-            
-            // 4. Socket API check
-            runApiHandshakeCheck(detectedIp, matchesMikroTikPrefix)
         }
     }
 
@@ -2978,26 +3012,28 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 // 2. MAC Address Check
                                 DiagnosticCheckRow(
                                     label = "Retrieve Router MAC Address",
-                                    statusText = if (detectedGatewayMac.isEmpty()) {
+                                    statusText = if (macCheckSkipped) "Skipped (OS Restricted)" else if (detectedGatewayMac.isEmpty()) {
                                         if (step0Status == "ERROR_MAC") "Failed to read ARP" else "Scanning ARP..."
                                     } else "Retrieved: $detectedGatewayMac",
                                     isSuccess = detectedGatewayMac.isNotEmpty(),
-                                    isRunning = step0Status == "RUNNING" && detectedGatewayMac.isEmpty() && detectedGatewayIp.isNotEmpty(),
-                                    isError = step0Status == "ERROR_MAC" && detectedGatewayMac.isEmpty()
+                                    isRunning = step0Status == "RUNNING" && detectedGatewayMac.isEmpty() && detectedGatewayIp.isNotEmpty() && !macCheckSkipped,
+                                    isError = step0Status == "ERROR_MAC" && detectedGatewayMac.isEmpty() && !macCheckSkipped,
+                                    isSkipped = macCheckSkipped
                                 )
                                 
                                 // 3. OUI Prefix Check
                                 DiagnosticCheckRow(
                                     label = "OUI Prefix Matching",
-                                    statusText = when (macPrefixCheckResult) {
+                                    statusText = if (macCheckSkipped) "Not available on this device" else when (macPrefixCheckResult) {
                                         true -> "OUI Match: MikroTik ($detectedMacPrefix)"
                                         false -> "OUI Match: Non-MikroTik ($detectedMacPrefix)"
                                         else -> "Waiting for MAC..."
                                     },
-                                    isSuccess = macPrefixCheckResult != null,
-                                    isRunning = step0Status == "RUNNING" && macPrefixCheckResult == null && detectedGatewayMac.isNotEmpty(),
+                                    isSuccess = macPrefixCheckResult != null && !macCheckSkipped,
+                                    isRunning = step0Status == "RUNNING" && macPrefixCheckResult == null && detectedGatewayMac.isNotEmpty() && !macCheckSkipped,
                                     isError = false,
-                                    accentColor = if (macPrefixCheckResult == true) Cyan else PaperDim
+                                    accentColor = if (macPrefixCheckResult == true) Cyan else PaperDim,
+                                    isSkipped = macCheckSkipped
                                 )
                                 
                                 // 4. RouterOS API Handshake Check
@@ -3006,10 +3042,10 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                     statusText = when (apiHandshakeResult) {
                                         true -> "Handshake: Genuine RouterOS Verified"
                                         false -> "Handshake: Connection refused / Handshake mismatch"
-                                        else -> "Waiting for OUI check..."
+                                        else -> if (macCheckSkipped) "Testing API connection..." else "Waiting for OUI check..."
                                     },
                                     isSuccess = apiHandshakeResult == true,
-                                    isRunning = step0Status == "RUNNING" && apiHandshakeResult == null && macPrefixCheckResult != null,
+                                    isRunning = step0Status == "RUNNING" && apiHandshakeResult == null && (macPrefixCheckResult != null || macCheckSkipped),
                                     isError = apiHandshakeResult == false
                                 )
                             }
@@ -3161,7 +3197,11 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                     ) {
                                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                             Text(
-                                                text = "This router doesn't have MikroTik's management API. We'll guide you through setup a different way.",
+                                                text = if (macCheckSkipped) {
+                                                    "Couldn't detect MikroTik's management API. If this is a MikroTik router, check that IP -> Services -> api is enabled."
+                                                } else {
+                                                    "This router doesn't have MikroTik's management API. We'll guide you through setup a different way."
+                                                },
                                                 color = Paper,
                                                 fontSize = 12.sp,
                                                 lineHeight = 16.sp
@@ -3740,6 +3780,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                     vm.routerPassword = default.password
                                                     vm.routerIp = ip
                                                     vm.routerApiPort = port
+                                                    sessionManager.saveRouterConnection(ip, port.toIntOrNull() ?: 8728, default.username, default.password)
                                                     logs.add("✅ Demo Mode: Connection established!")
                                                     logs.add("Detected RouterOS v7.12 on $selectedBrand Hardware")
                                                     currentStep = 2
@@ -3761,6 +3802,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                             vm.routerApiPort = port
                                             vm.routerUsername = username
                                             vm.routerPassword = password
+                                            sessionManager.saveRouterConnection(ip, port.toIntOrNull() ?: 8728, username, password)
                                             logs.add("✅ Demo Mode: Connection established!")
                                             currentStep = 2
                                         }
@@ -3794,6 +3836,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                     vm.routerPassword = default.password
                                                     vm.routerIp = ip
                                                     vm.routerApiPort = port
+                                                    sessionManager.saveRouterConnection(ip, port.toIntOrNull() ?: 8728, default.username, default.password)
                                                     logs.add("✅ Connection verified using defaults! Advancing.")
                                                     currentStep = 2
                                                     success = true
@@ -3828,6 +3871,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                 vm.routerApiPort = port
                                                 vm.routerUsername = username
                                                 vm.routerPassword = password
+                                                sessionManager.saveRouterConnection(ip, port.toIntOrNull() ?: 8728, username, password)
                                                 logs.add("✅ Connection verified! Advancing.")
                                                 currentStep = 2
                                             } else {

@@ -129,5 +129,74 @@ class SessionManager(private val context: Context) {
     // ─── Clear all (logout) ────────────────────────────────────────────────
     suspend fun clearAll() {
         context.dataStore.edit { it.clear() }
+        try {
+            plainPrefs.edit().clear().apply()
+            encryptedPrefs.edit().clear().apply()
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    // ─── Router Connection (Task 1 of 14) ───────────────────────────────────
+    private val masterKey by lazy {
+        androidx.security.crypto.MasterKey.Builder(context)
+            .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+            .build()
+    }
+
+    private val encryptedPrefs by lazy {
+        androidx.security.crypto.EncryptedSharedPreferences.create(
+            context,
+            "beamspot_secure_prefs",
+            masterKey,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    private val plainPrefs by lazy {
+        context.getSharedPreferences("beamspot_router_plain_prefs", Context.MODE_PRIVATE)
+    }
+
+    fun saveRouterConnection(ip: String, port: Int, username: String, password: String) {
+        plainPrefs.edit()
+            .putString("router_ip", ip)
+            .putInt("router_api_port", port)
+            .putString("router_username", username)
+            .apply()
+
+        try {
+            encryptedPrefs.edit()
+                .putString("router_password", password)
+                .apply()
+        } catch (e: Exception) {
+            // Fallback in case of encryption issues
+            plainPrefs.edit()
+                .putString("router_password", password)
+                .apply()
+        }
+    }
+
+    fun getRouterConnection(): RouterConnection? {
+        val ip = plainPrefs.getString("router_ip", null)
+        val port = plainPrefs.getInt("router_api_port", -1)
+        val username = plainPrefs.getString("router_username", null)
+        val password = try {
+            encryptedPrefs.getString("router_password", null)
+        } catch (e: Exception) {
+            null
+        } ?: plainPrefs.getString("router_password", null)
+
+        if (ip == null || port == -1 || username == null || password == null) {
+            return null
+        }
+        return RouterConnection(ip, port, username, password)
     }
 }
+
+data class RouterConnection(
+    val ip: String,
+    val port: Int,
+    val username: String,
+    val password: String
+)
