@@ -131,51 +131,84 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                 const usernameField = findField('text', ['user', 'admin', 'login', 'account']);
                 const passwordField = findField('password', ['pass', 'pwd', 'key']);
 
+                const setValueAndTriggerEvents = (element, val) => {
+                    if (!element) return;
+                    
+                    // 1. Focus the element
+                    element.focus();
+                    
+                    // 2. Set the value
+                    element.value = val;
+                    
+                    // 3. Dispatch events in sequence to satisfy Knockout, Angular, React, Vue, jQuery, etc.
+                    const eventTypes = ['focus', 'keydown', 'keypress', 'input', 'keyup', 'change', 'blur'];
+                    eventTypes.forEach(type => {
+                        try {
+                            let event;
+                            if (type === 'keydown' || type === 'keypress' || type === 'keyup') {
+                                event = new KeyboardEvent(type, {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    key: val.slice(-1),
+                                    char: val.slice(-1),
+                                    keyCode: 13
+                                });
+                            } else {
+                                event = new Event(type, { bubbles: true, cancelable: true });
+                            }
+                            element.dispatchEvent(event);
+                        } catch (e) {
+                            try {
+                                const evt = document.createEvent('HTMLEvents');
+                                evt.initEvent(type, true, true);
+                                element.dispatchEvent(evt);
+                            } catch (err) {}
+                        }
+                    });
+                };
+
                 if (usernameField.element) {
-                    usernameField.element.value = username;
-                    usernameField.element.dispatchEvent(new Event('input', { bubbles: true }));
-                    usernameField.element.dispatchEvent(new Event('change', { bubbles: true }));
+                    setValueAndTriggerEvents(usernameField.element, username);
                 }
                 if (passwordField.element) {
-                    passwordField.element.value = password;
-                    passwordField.element.dispatchEvent(new Event('input', { bubbles: true }));
-                    passwordField.element.dispatchEvent(new Event('change', { bubbles: true }));
+                    setValueAndTriggerEvents(passwordField.element, password);
                 }
 
-                const form = usernameField.element ? usernameField.element.closest('form') : null;
-                const submitButton = (form ? form.querySelector('button[type="submit"], input[type="submit"], button') : null)
-                    || document.querySelector('button[type="submit"], input[type="submit"], button, input[type="button"]');
-                
-                if (submitButton) {
-                    submitButton.click();
-                    return 'clicked_submit';
-                } else if (form) {
-                    form.submit(); // fallback only if truly no clickable submit element exists on the page
-                    return 'submitted_fallback';
-                }
-                
-                // Fallback click login button for other non-standard clickable elements
-                const buttons = Array.from(document.querySelectorAll('a, div, span'));
-                let bestBtn = null;
-                let bestBtnScore = 0;
-                const btnPatterns = ['login', 'log in', 'submit', 'sign in', 'signin', 'enter', 'ok'];
-                for (const btn of buttons) {
-                    const text = (btn.textContent || btn.id || btn.className || '').toLowerCase();
-                    let score = 0;
-                    for (const pat of btnPatterns) {
-                        if (text.includes(pat)) score++;
+                // Delay submission slightly to allow modern reactive frameworks (Knockout, React, Angular) 
+                // to sync their internal state/model bindings with the newly entered values
+                setTimeout(() => {
+                    const form = usernameField.element ? usernameField.element.closest('form') : null;
+                    const submitButton = (form ? form.querySelector('button[type="submit"], input[type="submit"], button') : null)
+                        || document.querySelector('button[type="submit"], input[type="submit"], button, input[type="button"]');
+                    
+                    if (submitButton) {
+                        submitButton.click();
+                    } else if (form) {
+                        form.submit();
+                    } else {
+                        // Fallback click login button for other non-standard clickable elements
+                        const buttons = Array.from(document.querySelectorAll('a, div, span'));
+                        let bestBtn = null;
+                        let bestBtnScore = 0;
+                        const btnPatterns = ['login', 'log in', 'submit', 'sign in', 'signin', 'enter', 'ok'];
+                        for (const btn of buttons) {
+                            const text = (btn.textContent || btn.id || btn.className || '').toLowerCase();
+                            let score = 0;
+                            for (const pat of btnPatterns) {
+                                if (text.includes(pat)) score++;
+                            }
+                            if (score > bestBtnScore) {
+                                bestBtnScore = score;
+                                bestBtn = btn;
+                            }
+                        }
+                        if (bestBtn) {
+                            bestBtn.click();
+                        }
                     }
-                    if (score > bestBtnScore) {
-                        bestBtnScore = score;
-                        bestBtn = btn;
-                    }
-                }
-                if (bestBtn) {
-                    bestBtn.click();
-                    return 'clicked_extra_button';
-                }
+                }, 500);
 
-                return 'no_form_found';
+                return 'autofilled_waiting_for_async_submit';
             })('$escapedUser', '$escapedPass');
         """.trimIndent()
     }
@@ -433,10 +466,14 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
+                                databaseEnabled = true
                                 useWideViewPort = true
                                 loadWithOverviewMode = true
                                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                                userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                             }
+                            android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     super.onPageStarted(view, url, favicon)
