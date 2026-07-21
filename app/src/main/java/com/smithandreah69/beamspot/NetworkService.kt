@@ -172,7 +172,37 @@ interface ApiService {
 
     @POST("api/v1/router/fingerprint")
     suspend fun fingerprintRouter(@Body request: RouterFingerprintRequest): RouterFingerprintResponse
+
+    @POST("api/listings")
+    suspend fun createListing(@Body request: CreateListingRequest): ListingResponse
 }
+
+data class CreateListingRequest(
+    val connectionType: String,
+    val pricePerMin: Double,
+    val ssid: String,
+    val bssid: String,
+    val beamSpotSsid: String?,
+    val routerIp: String? = null,
+    val routerApiPort: Int? = null,
+    val routerUsername: String? = null,
+    val routerPassword: String? = null
+)
+
+data class ListingDetail(
+    val id: String,
+    val host_id: String,
+    val connection_type: String,
+    val price_per_min: Double,
+    val ssid: String,
+    val bssid: String,
+    val beamspot_ssid: String?,
+    val status: String
+)
+
+data class ListingResponse(
+    val listing: ListingDetail
+)
 
 // ─── Retrofit Client Singleton ────────────────────────────────────────────
 

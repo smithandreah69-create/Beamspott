@@ -202,6 +202,21 @@
             <p class="text-xs text-paperdim">You may now browse freely. Keep this tab open to monitor your session.</p>
         </div>
 
+        <!-- 5. Error Stage -->
+        <div id="stage-error" class="hidden text-center py-12 space-y-6">
+            <div class="flex justify-center">
+                <div class="w-16 h-16 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center">
+                    <svg class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.249-8.25-3.286zm0 13.036h.008v.008H12v-.008z" />
+                    </svg>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-xl font-bold text-white mb-2">Invalid Connection Link</h3>
+                <p class="text-sm text-paperdim max-w-xs mx-auto">This link isn't valid. Please reconnect to the WiFi network and try again.</p>
+            </div>
+        </div>
+
         <!-- Footer -->
         <div class="mt-8 pt-6 border-t border-borderline/50 text-center">
             <p class="text-[11px] text-paperdim">Secure processing by <strong>IntaSend</strong>. By continuing, you agree to the <a href="/terms" target="_blank" class="text-cyanAccent hover:underline">Terms of Service</a>.</p>
@@ -222,6 +237,8 @@
         // Parse query params
         const urlParams = new URLSearchParams(window.location.search);
         currentListingId = urlParams.get('listingId');
+        const guestMac = urlParams.get('mac') || urlParams.get('mac-address') || "";
+        const linkLoginOnly = urlParams.get('link-login-only') || "";
         
         // Generate a stable guest device fingerprint if not supplied (VPN service will provide/know this but we store on captive portal too)
         let guestDeviceId = localStorage.getItem('guest_device_id');
@@ -233,13 +250,12 @@
         // Initialize state
         window.addEventListener('load', () => {
             if (!currentListingId) {
-                // If not provided, fallback to a mock/demo listingId to keep page fully usable for testing
-                console.warn('listingId URL parameter not found. Defaulting to a test listing ID.');
-                currentListingId = '00000000-0000-0000-0000-000000000000';
+                showStage('stage-error');
+                return;
             }
             // Trigger default state
             setDuration(30);
-            document.getElementById('device-id-display').innerText = guestDeviceId.toUpperCase();
+            document.getElementById('device-id-display').innerText = (guestMac || guestDeviceId).toUpperCase();
         });
 
         function setDuration(mins) {
@@ -311,6 +327,7 @@
             document.getElementById('stage-loading').classList.add('hidden');
             document.getElementById('stage-polling').classList.add('hidden');
             document.getElementById('stage-connected').classList.add('hidden');
+            document.getElementById('stage-error').classList.add('hidden');
 
             document.getElementById(stageId).classList.remove('hidden');
         }
@@ -359,6 +376,8 @@
                 const reqBody = {
                     listingId: currentListingId,
                     guestDeviceId: guestDeviceId,
+                    guestMac: guestMac || guestDeviceId,
+                    linkLoginOnly: linkLoginOnly,
                     durationMin: selectedDuration,
                     phone: phone
                 };

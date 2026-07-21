@@ -23,6 +23,106 @@ const db = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// Run database migrations on startup
+db.query(`
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='router_ip') THEN
+            ALTER TABLE listings ADD COLUMN router_ip TEXT;
+            ALTER TABLE listings ADD COLUMN router_api_port INT;
+            ALTER TABLE listings ADD COLUMN router_username TEXT;
+            ALTER TABLE listings ADD COLUMN router_password TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='guest_mac') THEN
+            ALTER TABLE sessions ADD COLUMN guest_mac TEXT;
+        END IF;
+    END $$;
+`).then(() => {
+    console.log("Database migrations applied successfully.");
+}).catch(err => {
+    console.error("Database migration error:", err);
+});
+
+// ─── Mikrotik Integration ──────────────────────────────────────────────────
+const MikrotikClient = require('./mikrotik');
+
+async function authorizeDeviceOnRouter(listingId, mac, sessionId) {
+    if (!mac) return;
+    try {
+        const listing = (await db.query('SELECT router_ip, router_api_port, router_username, router_password FROM listings WHERE id=$1', [listingId])).rows[0];
+        if (!listing || !listing.router_ip || !listing.router_username) {
+            console.log(`[Router Auth] No router configured for listing ${listingId}`);
+            return;
+        }
+        const client = new MikrotikClient(
+            listing.router_ip,
+            listing.router_api_port || 8728,
+            listing.router_username,
+            listing.router_password || ""
+        );
+        await client.connect();
+        await client.login();
+        console.log(`[Router Auth] Connected & Authenticated to router at ${listing.router_ip}`);
+
+        // Check if an IP binding for this MAC already exists
+        const printResp = await client.execute('/ip/hotspot/ip-binding/print', { '.proplist': '.id,mac-address' });
+        const existingBinding = printResp.find(sentence => {
+            return sentence.some(w => w.toLowerCase() === `=mac-address=${mac.toLowerCase()}`);
+        });
+
+        if (existingBinding) {
+            const idWord = existingBinding.find(w => w.startsWith('=.id=') || w.startsWith('.id='));
+            const bindingId = idWord ? idWord.substring(idWord.indexOf('=') + 1) : null;
+            if (bindingId) {
+                console.log(`[Router Auth] Modifying existing IP binding ${bindingId} for MAC ${mac}`);
+                await client.execute('/ip/hotspot/ip-binding/set', { '.id': bindingId, 'type': 'bypassed', 'comment': `BeamSpot Guest ${sessionId}` });
+            }
+        } else {
+            console.log(`[Router Auth] Creating new IP binding bypass for MAC ${mac}`);
+            await client.execute('/ip/hotspot/ip-binding/add', { 'mac-address': mac, 'type': 'bypassed', 'comment': `BeamSpot Guest ${sessionId}` });
+        }
+        client.disconnect();
+        console.log(`[Router Auth] Successfully authorized device MAC: ${mac} on router`);
+    } catch (e) {
+        console.error(`[Router Auth] Failed to authorize device MAC: ${mac} on router:`, e.message);
+    }
+}
+
+async function deauthorizeDeviceOnRouter(listingId, mac) {
+    if (!mac) return;
+    try {
+        const listing = (await db.query('SELECT router_ip, router_api_port, router_username, router_password FROM listings WHERE id=$1', [listingId])).rows[0];
+        if (!listing || !listing.router_ip || !listing.router_username) {
+            return;
+        }
+        const client = new MikrotikClient(
+            listing.router_ip,
+            listing.router_api_port || 8728,
+            listing.router_username,
+            listing.router_password || ""
+        );
+        await client.connect();
+        await client.login();
+
+        const printResp = await client.execute('/ip/hotspot/ip-binding/print', { '.proplist': '.id,mac-address' });
+        const existingBinding = printResp.find(sentence => {
+            return sentence.some(w => w.toLowerCase() === `=mac-address=${mac.toLowerCase()}`);
+        });
+
+        if (existingBinding) {
+            const idWord = existingBinding.find(w => w.startsWith('=.id=') || w.startsWith('.id='));
+            const bindingId = idWord ? idWord.substring(idWord.indexOf('=') + 1) : null;
+            if (bindingId) {
+                console.log(`[Router Deauth] Removing IP binding ${bindingId} for MAC ${mac}`);
+                await client.execute('/ip/hotspot/ip-binding/remove', { '.id': bindingId });
+            }
+        }
+        client.disconnect();
+    } catch (e) {
+        console.error(`[Router Deauth] Failed to deauthorize device MAC: ${mac} on router:`, e.message);
+    }
+}
+
 // ─── Google OAuth client ──────────────────────────────────────────────────
 const googleClient = new OAuth2Client(process.env.GOOGLE_WEB_CLIENT_ID);
 
@@ -133,7 +233,7 @@ function getMaxGuests(connectionType) {
 
 // Create / update a listing (host registering their network)
 app.post('/api/listings', requireAuth, async (req, res) => {
-    const { connectionType, pricePerMin, ssid, bssid, beamSpotSsid } = req.body;
+    const { connectionType, pricePerMin, ssid, bssid, beamSpotSsid, routerIp, routerApiPort, routerUsername, routerPassword } = req.body;
     if (!ssid || !bssid || !pricePerMin) return res.status(400).json({ error: 'ssid, bssid, pricePerMin required' });
 
     const upperBssid = bssid.toUpperCase();
@@ -152,13 +252,13 @@ app.post('/api/listings', requireAuth, async (req, res) => {
     let listing;
     if (existing) {
         listing = (await db.query(
-            `UPDATE listings SET connection_type=$1, price_per_min=$2, ssid=$3, bssid=$4, beamspot_ssid=$5, status='active' WHERE id=$6 RETURNING *`,
-            [connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot', existing.id]
+            `UPDATE listings SET connection_type=$1, price_per_min=$2, ssid=$3, bssid=$4, beamspot_ssid=$5, router_ip=$6, router_api_port=$7, router_username=$8, router_password=$9, status='active' WHERE id=$10 RETURNING *`,
+            [connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot', routerIp || null, routerApiPort ? parseInt(routerApiPort) : null, routerUsername || null, routerPassword || null, existing.id]
         )).rows[0];
     } else {
         listing = (await db.query(
-            `INSERT INTO listings (host_id, connection_type, price_per_min, ssid, bssid, beamspot_ssid) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-            [req.user.userId, connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot']
+            `INSERT INTO listings (host_id, connection_type, price_per_min, ssid, bssid, beamspot_ssid, router_ip, router_api_port, router_username, router_password) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+            [req.user.userId, connectionType, pricePerMin, ssid, upperBssid, beamSpotSsid || ssid + '_BeamSpot', routerIp || null, routerApiPort ? parseInt(routerApiPort) : null, routerUsername || null, routerPassword || null]
         )).rows[0];
     }
     res.json({ listing });
@@ -327,7 +427,7 @@ app.post('/api/networks/verify', guestLimit, async (req, res) => {
 
 // Create a session (guest picks duration, initiates payment)
 app.post('/api/sessions', guestLimit, async (req, res) => {
-    const { listingId, guestDeviceId, durationMin, paymentMethod, phone } = req.body;
+    const { listingId, guestDeviceId, durationMin, paymentMethod, phone, guestMac } = req.body;
     if (!listingId || !durationMin || durationMin < 1 || durationMin > 1440) // TEMPORARY for testing — restore to 15 before production launch
         return res.status(400).json({ error: 'Invalid session parameters' });
 
@@ -391,9 +491,9 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
     const hostPayout  = amountTotal - platformFee;
 
     const session = (await db.query(
-        `INSERT INTO sessions (listing_id, guest_device_id, duration_min, amount_total, platform_fee, host_payout, status)
-         VALUES ($1,$2,$3,$4,$5,$6,'PENDING_PAYMENT') RETURNING id`,
-         [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout]
+        `INSERT INTO sessions (listing_id, guest_device_id, duration_min, amount_total, platform_fee, host_payout, status, guest_mac)
+         VALUES ($1,$2,$3,$4,$5,$6,'PENDING_PAYMENT',$7) RETURNING id`,
+         [listingId, guestDeviceId, durationMin, amountTotal, platformFee, hostPayout, guestMac || null]
     )).rows[0];
 
     // TEST MODE ONLY — remove before wiring up real payment
@@ -409,6 +509,10 @@ app.post('/api/sessions', guestLimit, async (req, res) => {
              VALUES ($1,$2,'authorize',$3)`,
             [listingId, guestDeviceId, expiresAt]
         ).catch(() => {});
+
+        // Authorize guest MAC directly on the router for Task 8
+        authorizeDeviceOnRouter(listingId, guestMac || guestDeviceId, session.id);
+
         return res.json({ 
             sessionId: session.id, 
             amountTotal, 
@@ -526,6 +630,9 @@ app.post('/api/payments/webhook', express.json(), async (req, res) => {
         [session.listing_id, session.guest_device_id, expiresAt]
     ).catch(() => {}); // ignore if router_actions table not set up yet
 
+    // Authorize guest MAC directly on the router for Task 8
+    authorizeDeviceOnRouter(session.listing_id, session.guest_mac || session.guest_device_id, sessionId);
+
     res.json({ ok: true });
 });
 
@@ -560,13 +667,16 @@ app.get('/api/router/pending', async (req, res) => {
 setInterval(async () => {
     try {
         const { rows } = await db.query(
-            `UPDATE sessions SET status='EXPIRED' WHERE status='CONNECTED' AND expires_at <= NOW() RETURNING id, listing_id, guest_device_id`
+            `UPDATE sessions SET status='EXPIRED' WHERE status='CONNECTED' AND expires_at <= NOW() RETURNING id, listing_id, guest_device_id, guest_mac`
         );
         for (const s of rows) {
             await db.query(
                 `INSERT INTO router_actions (listing_id, guest_device_id, action, expires_at) VALUES ($1,$2,'deauthorize',NOW())`,
                 [s.listing_id, s.guest_device_id]
             ).catch(() => {});
+
+            // Deauthorize guest MAC directly on the router for Task 9
+            deauthorizeDeviceOnRouter(s.listing_id, s.guest_mac || s.guest_device_id);
         }
         // Also fail sessions stuck in PENDING_PAYMENT for > 10 minutes
         await db.query(`UPDATE sessions SET status='FAILED' WHERE status='PENDING_PAYMENT' AND created_at < NOW() - INTERVAL '10 minutes'`);

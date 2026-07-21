@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS listings (
     bssid            TEXT UNIQUE NOT NULL,      -- hardware MAC — anti-spoof anchor (stored uppercase)
     beamspot_ssid    TEXT,                      -- the public name guests see
     status           TEXT DEFAULT 'active',     -- 'active' | 'paused' | 'offline'
+    router_ip        TEXT,                      -- MikroTik IP (Task 8)
+    router_api_port  INT,                       -- MikroTik API Port (Task 8)
+    router_username  TEXT,                      -- MikroTik API Username (Task 8)
+    router_password  TEXT,                      -- MikroTik API Password (Task 8)
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -44,6 +48,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     status           TEXT DEFAULT 'PENDING_PAYMENT',
     -- PENDING_PAYMENT → CONNECTED → EXPIRED | REFUNDED | FAILED
     payment_ref      TEXT,                      -- Flutterwave transaction reference
+    guest_mac        TEXT,                      -- guest's router-provided MAC (Task 8)
     started_at       TIMESTAMPTZ,
     expires_at       TIMESTAMPTZ,
     created_at       TIMESTAMPTZ DEFAULT NOW()

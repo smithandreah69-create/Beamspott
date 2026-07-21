@@ -72,7 +72,7 @@ private val PaperDim    = Color(0x9EF0EEE6.toInt())
 private val BorderLine  = Color(0x1AF0EEE6.toInt())
 
 // ─── Navigation routes ────────────────────────────────────────────────────
-private object Route {
+internal object Route {
     const val SPLASH           = "splash"
     const val LANDING          = "landing"
     const val SIGN_IN          = "sign_in"
@@ -83,6 +83,7 @@ private object Route {
     const val SB_PERMISSIONS   = "sb_permissions"    // request real permissions
     const val SB_NAMING        = "sb_naming"         // name the BeamSpot network
     const val ROUTER_SETUP     = "router_setup"
+    const val GENERIC_ROUTER_SETUP = "generic_router_setup"
     const val HOTSPOT_SETUP    = "hotspot_setup"
     const val VERIFY_SETUP     = "verify_setup"
     const val DASHBOARD        = "dashboard"
@@ -403,6 +404,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var linkSpeedMbps      by mutableStateOf(0)
     var distanceMeters     by mutableStateOf(0.0)
     var connectedSsid      by mutableStateOf("")
+    var routerReachable    by mutableStateOf(true)
+    var isFirstStatsFetchCompleted by mutableStateOf(false)
 
     // Earnings history (simulated for now)
     var earningsHistory by mutableStateOf<List<EarningsRecord>>(emptyList())
@@ -440,26 +443,77 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshStats(helper: WifiScanHelper) {
         viewModelScope.launch {
-            val stats = helper.getConnectionStats() ?: return@launch
-            downloadMbps   = stats.downloadMbps
-            uploadMbps     = stats.uploadMbps
-            signalBars     = stats.signalBars
-            signalRssi     = stats.rssiDbm
-            linkSpeedMbps  = stats.linkSpeedMbps
-            distanceMeters = stats.distanceMeters
-            connectedSsid  = stats.ssid
+            val stats = helper.getConnectionStats()
+            if (stats != null) {
+                downloadMbps   = stats.downloadMbps
+                uploadMbps     = stats.uploadMbps
+                signalBars     = stats.signalBars
+                signalRssi     = stats.rssiDbm
+                linkSpeedMbps  = stats.linkSpeedMbps
+                distanceMeters = stats.distanceMeters
+                connectedSsid  = stats.ssid
+            }
 
-            if (BeamSpotVpnService.isRunning) {
-                guestCount = BeamSpotVpnService.activeLocalClientsCount
-            } else if (RetrofitClient.getToken() != null) {
-                try {
-                    val hostStats = RetrofitClient.apiService.getHostStats()
-                    guestCount = hostStats.activeGuests
-                    todayEarnings = hostStats.earningsToday
-                } catch (e: Exception) {
-                    android.util.Log.e("AppViewModel", "Failed to refresh host stats from backend", e)
+            if (selectedMode == "router") {
+                if (isDemoMode) {
+                    routerReachable = true
+                    guestCount = 1
+                } else {
+                    val activeGuests = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val client = RouterOsApiClient(routerIp, routerApiPort.toIntOrNull() ?: 8728)
+                        try {
+                            if (client.connect()) {
+                                val loginRes = client.login(routerUsername, routerPassword)
+                                if (loginRes.first) {
+                                    // Lightweight real API call to confirm reachable: system-identity query
+                                    client.writeSentence(listOf("/system/identity/print"))
+                                    client.readResponseSentenceGroup()
+                                    
+                                    val activeList = client.checkActiveHotspotClients()
+                                    routerReachable = true
+                                    activeList.size
+                                } else {
+                                    routerReachable = false
+                                    0
+                                }
+                            } else {
+                                routerReachable = false
+                                0
+                            }
+                        } catch (e: Exception) {
+                            routerReachable = false
+                            0
+                        } finally {
+                            client.disconnect()
+                        }
+                    }
+                    if (routerReachable) {
+                        guestCount = activeGuests
+                    }
+                }
+
+                if (RetrofitClient.getToken() != null) {
+                    try {
+                        val hostStats = RetrofitClient.apiService.getHostStats()
+                        todayEarnings = hostStats.earningsToday
+                    } catch (e: Exception) {
+                        android.util.Log.e("AppViewModel", "Failed to refresh host stats from backend in Router Mode", e)
+                    }
+                }
+            } else {
+                if (BeamSpotVpnService.isRunning) {
+                    guestCount = BeamSpotVpnService.activeLocalClientsCount
+                } else if (RetrofitClient.getToken() != null) {
+                    try {
+                        val hostStats = RetrofitClient.apiService.getHostStats()
+                        guestCount = hostStats.activeGuests
+                        todayEarnings = hostStats.earningsToday
+                    } catch (e: Exception) {
+                        android.util.Log.e("AppViewModel", "Failed to refresh host stats from backend", e)
+                    }
                 }
             }
+            isFirstStatsFetchCompleted = true
         }
     }
 
@@ -649,6 +703,7 @@ fun BeamSpotApp() {
         composable(Route.SIGN_IN)        { SignInScreen(nav, vm) }
         composable(Route.PAYOUT_SETUP)   { PayoutSetupScreen(nav, vm) }
         composable(Route.ROUTER_SETUP)   { RouterSetupScreen(nav, vm) }
+        composable(Route.GENERIC_ROUTER_SETUP) { GenericRouterSetupScreen(nav, vm) }
         composable(Route.MAIN_APP)       { MainAppScreen(nav, vm) }
     }
 }
@@ -2399,6 +2454,128 @@ class RouterOsApiClient(
 
     fun applyWirelessSettings(ssid: String, passwordStr: String): Pair<Boolean, String> {
         return try {
+            // 1. Get or create Security Profile
+            writeSentence(listOf("/interface/wireless/security-profiles/print"))
+            var response = readResponseSentenceGroup()
+            if (response.any { it.firstOrNull() == "!trap" }) {
+                // Fallback to default security-profile if wireless print fails
+                return fallbackWirelessSettings(ssid, passwordStr)
+            }
+            
+            val existingProfile = response.find { sentence ->
+                sentence.any { it == "=name=beamspot_guest_profile" || it == "name=beamspot_guest_profile" }
+            }
+            val profileId = existingProfile?.find { it.startsWith("=.id=") || it.startsWith(".id=") }?.substringAfter("=") ?: "beamspot_guest_profile"
+            val hasProfile = existingProfile != null
+            
+            val profileCmd = if (hasProfile) {
+                listOf(
+                    "/interface/wireless/security-profiles/set",
+                    "=.id=$profileId",
+                    "=wpa2-pre-shared-key=$passwordStr",
+                    "=wpa-pre-shared-key=$passwordStr",
+                    "=mode=dynamic-keys",
+                    "=authentication-types=wpa2-psk"
+                )
+            } else {
+                listOf(
+                    "/interface/wireless/security-profiles/add",
+                    "=name=beamspot_guest_profile",
+                    "=wpa2-pre-shared-key=$passwordStr",
+                    "=wpa-pre-shared-key=$passwordStr",
+                    "=mode=dynamic-keys",
+                    "=authentication-types=wpa2-psk"
+                )
+            }
+            writeSentence(profileCmd)
+            var profileResp = readResponseSentenceGroup()
+            if (profileResp.any { it.firstOrNull() == "!trap" }) {
+                val trapMsg = profileResp.flatten().find { it.startsWith("=message=") || it.startsWith("message=") }?.substringAfter("=") ?: ""
+                return Pair(false, "Security Profile creation failed: $trapMsg")
+            }
+            
+            // 2. Get or create wireless interface wlan-guest
+            writeSentence(listOf("/interface/wireless/print"))
+            val interfaceResp = readResponseSentenceGroup()
+            val existingIface = interfaceResp.find { sentence ->
+                sentence.any { it == "=name=wlan-guest" || it == "name=wlan-guest" }
+            }
+            val ifaceId = existingIface?.find { it.startsWith("=.id=") || it.startsWith(".id=") }?.substringAfter("=") ?: "wlan-guest"
+            val hasIface = existingIface != null
+            
+            val ifaceCmd = if (hasIface) {
+                listOf(
+                    "/interface/wireless/set",
+                    "=.id=$ifaceId",
+                    "=ssid=$ssid",
+                    "=security-profile=beamspot_guest_profile",
+                    "=disabled=no"
+                )
+            } else {
+                // Find master interface (first physical wlan interface)
+                val masterIface = interfaceResp.find { sentence ->
+                    val name = sentence.find { it.startsWith("=name=") || it.startsWith("name=") }?.substringAfter("=") ?: ""
+                    name.isNotEmpty() && !name.contains("-guest")
+                }?.find { it.startsWith("=name=") || it.startsWith("name=") }?.substringAfter("=") ?: "wlan1"
+                
+                listOf(
+                    "/interface/wireless/add",
+                    "=name=wlan-guest",
+                    "=master-interface=$masterIface",
+                    "=ssid=$ssid",
+                    "=security-profile=beamspot_guest_profile",
+                    "=disabled=no",
+                    "=mode=ap-bridge"
+                )
+            }
+            writeSentence(ifaceCmd)
+            var ifaceResp = readResponseSentenceGroup()
+            if (ifaceResp.any { it.firstOrNull() == "!trap" }) {
+                val trapMsg = ifaceResp.flatten().find { it.startsWith("=message=") || it.startsWith("message=") }?.substringAfter("=") ?: ""
+                
+                // Fallback to configuring the first wireless interface directly
+                val fallbackMaster = interfaceResp.firstOrNull()?.find { it.startsWith("=name=") || it.startsWith("name=") }?.substringAfter("=") ?: "wlan1"
+                writeSentence(listOf(
+                    "/interface/wireless/set",
+                    "=.id=$fallbackMaster",
+                    "=ssid=$ssid",
+                    "=security-profile=beamspot_guest_profile",
+                    "=disabled=no"
+                ))
+                val fbIfaceResp = readResponseSentenceGroup()
+                if (fbIfaceResp.any { it.firstOrNull() == "!trap" }) {
+                    val fbTrapMsg = fbIfaceResp.flatten().find { it.startsWith("=message=") || it.startsWith("message=") }?.substringAfter("=") ?: ""
+                    return Pair(false, "Wireless configuration failed: $fbTrapMsg")
+                }
+            }
+            
+            // 3. Read back and verify configuration
+            writeSentence(listOf("/interface/wireless/print"))
+            val readBackResp = readResponseSentenceGroup()
+            val verifiedIface = readBackResp.find { sentence ->
+                val name = sentence.find { it.startsWith("=name=") || it.startsWith("name=") }?.substringAfter("=") ?: ""
+                name == "wlan-guest" || name == "wlan1" || name.contains("wlan")
+            }
+            
+            if (verifiedIface != null) {
+                val readSsid = verifiedIface.find { it.startsWith("=ssid=") || it.startsWith("ssid=") }?.substringAfter("=") ?: ""
+                val readProfile = verifiedIface.find { it.startsWith("=security-profile=") || it.startsWith("security-profile=") }?.substringAfter("=") ?: ""
+                
+                if (readSsid == ssid && (readProfile == "beamspot_guest_profile" || readProfile == "default")) {
+                    return Pair(true, "Wireless settings successfully verified on router!")
+                } else {
+                    return Pair(false, "Verification failed: SSID did not match '$ssid'.")
+                }
+            }
+            
+            Pair(true, "Wireless settings successfully applied to interface.")
+        } catch (e: Exception) {
+            Pair(false, "Wireless update error: ${e.localizedMessage}")
+        }
+    }
+
+    private fun fallbackWirelessSettings(ssid: String, passwordStr: String): Pair<Boolean, String> {
+        return try {
             writeSentence(listOf("/interface/wireless/print"))
             val printResp = readResponseSentenceGroup()
             val wlanName = printResp.flatten().find { it.startsWith("=name=") }?.substringAfter("=") ?: "wlan1"
@@ -2410,7 +2587,8 @@ class RouterOsApiClient(
             ))
             var resp = readResponseSentenceGroup()
             if (resp.any { it.firstOrNull() == "!trap" }) {
-                return Pair(false, "SSID configure failed: " + resp.flatten().joinToString(", "))
+                val trapMsg = resp.flatten().find { it.startsWith("=message=") || it.startsWith("message=") }?.substringAfter("=") ?: ""
+                return Pair(false, "Fallback SSID configure failed: $trapMsg")
             }
 
             writeSentence(listOf(
@@ -2423,12 +2601,155 @@ class RouterOsApiClient(
             ))
             resp = readResponseSentenceGroup()
             if (resp.any { it.firstOrNull() == "!trap" }) {
-                return Pair(false, "Security Profile configure failed: " + resp.flatten().joinToString(", "))
+                val trapMsg = resp.flatten().find { it.startsWith("=message=") || it.startsWith("message=") }?.substringAfter("=") ?: ""
+                return Pair(false, "Fallback Security Profile configure failed: $trapMsg")
             }
 
-            Pair(true, "Wireless broadcast settings successfully applied to interface: $wlanName")
+            Pair(true, "Fallback wireless settings successfully applied to default interface: $wlanName")
         } catch (e: Exception) {
-            Pair(false, "Wireless update error: ${e.localizedMessage}")
+            Pair(false, "Fallback wireless update error: ${e.localizedMessage}")
+        }
+    }
+
+    fun configureHotspot(): Pair<Boolean, String> {
+        return try {
+            // Determine guest interface name (default wlan-guest or fallback to first found wlan interface)
+            writeSentence(listOf("/interface/wireless/print"))
+            val printResp = readResponseSentenceGroup()
+            val wlanName = printResp.flatten().find { entry ->
+                entry.startsWith("=name=wlan-guest") || entry.startsWith("name=wlan-guest")
+            }?.substringAfter("=") ?: printResp.flatten().find { entry ->
+                entry.startsWith("=name=") || entry.startsWith("name=")
+            }?.substringAfter("=") ?: "wlan1"
+
+            // 1. Configure IP Pool hs-pool-beamspot
+            writeSentence(listOf("/ip/pool/print"))
+            val poolPrint = readResponseSentenceGroup()
+            val hasPool = poolPrint.flatten().any { it == "=name=hs-pool-beamspot" || it == "name=hs-pool-beamspot" }
+            val poolCmd = if (hasPool) {
+                listOf("/ip/pool/set", "=.id=hs-pool-beamspot", "=ranges=192.168.89.10-192.168.89.254")
+            } else {
+                listOf("/ip/pool/add", "=name=hs-pool-beamspot", "=ranges=192.168.89.10-192.168.89.254")
+            }
+            writeSentence(poolCmd)
+            readResponseSentenceGroup()
+
+            // 2. Configure IP Address on Interface
+            writeSentence(listOf("/ip/address/print"))
+            val addrPrint = readResponseSentenceGroup()
+            val hasAddr = addrPrint.find { sentence ->
+                sentence.any { it == "=interface=$wlanName" || it == "interface=$wlanName" } &&
+                sentence.any { it == "=address=192.168.89.1/24" || it == "address=192.168.89.1/24" }
+            }
+            if (hasAddr == null) {
+                writeSentence(listOf(
+                    "/ip/address/add",
+                    "=address=192.168.89.1/24",
+                    "=network=192.168.89.0",
+                    "=interface=$wlanName"
+                ))
+                readResponseSentenceGroup()
+            }
+
+            // 3. Configure DHCP Network
+            writeSentence(listOf("/ip/dhcp-server/network/print"))
+            val dhcpNetPrint = readResponseSentenceGroup()
+            val hasDhcpNet = dhcpNetPrint.flatten().any { it == "=address=192.168.89.0/24" || it == "address=192.168.89.0/24" }
+            val dhcpNetCmd = if (hasDhcpNet) {
+                listOf("/ip/dhcp-server/network/set", "=.id=192.168.89.0/24", "=gateway=192.168.89.1", "=dns-server=8.8.8.8,1.1.1.1")
+            } else {
+                listOf("/ip/dhcp-server/network/add", "=address=192.168.89.0/24", "=gateway=192.168.89.1", "=dns-server=8.8.8.8,1.1.1.1")
+            }
+            writeSentence(dhcpNetCmd)
+            readResponseSentenceGroup()
+
+            // 4. Configure DHCP Server
+            writeSentence(listOf("/ip/dhcp-server/print"))
+            val dhcpPrint = readResponseSentenceGroup()
+            val existingDhcp = dhcpPrint.find { sentence ->
+                sentence.any { it == "=name=hs-dhcp-beamspot" || it == "name=hs-dhcp-beamspot" }
+            }
+            val dhcpCmd = if (existingDhcp != null) {
+                val dhcpId = existingDhcp.find { it.startsWith("=.id=") || it.startsWith(".id=") }?.substringAfter("=") ?: "hs-dhcp-beamspot"
+                listOf("/ip/dhcp-server/set", "=.id=$dhcpId", "=interface=$wlanName", "=address-pool=hs-pool-beamspot", "=lease-time=1h")
+            } else {
+                listOf("/ip/dhcp-server/add", "=name=hs-dhcp-beamspot", "=interface=$wlanName", "=address-pool=hs-pool-beamspot", "=lease-time=1h", "=disabled=no")
+            }
+            writeSentence(dhcpCmd)
+            readResponseSentenceGroup()
+
+            // 5. Configure Hotspot Profile
+            writeSentence(listOf("/ip/hotspot/profile/print"))
+            val profilePrint = readResponseSentenceGroup()
+            val existingProfile = profilePrint.find { sentence ->
+                sentence.any { it == "=name=hs-profile-beamspot" || it == "name=hs-profile-beamspot" }
+            }
+            
+            // Get standard html-directory from default profile if available
+            val defaultHtmlDir = profilePrint.find { sentence ->
+                sentence.any { it == "=name=default" || it == "name=default" }
+            }?.find { it.startsWith("=html-directory=") || it.startsWith("html-directory=") }?.substringAfter("=") ?: "hotspot"
+
+            val profileCmd = if (existingProfile != null) {
+                val profileId = existingProfile.find { it.startsWith("=.id=") || it.startsWith(".id=") }?.substringAfter("=") ?: "hs-profile-beamspot"
+                listOf(
+                    "/ip/hotspot/profile/set",
+                    "=.id=$profileId",
+                    "=hotspot-address=192.168.89.1",
+                    "=dns-name=beamspot.net",
+                    "=login-by=http-chap,http-pap,cookie",
+                    "=html-directory=$defaultHtmlDir"
+                )
+            } else {
+                listOf(
+                    "/ip/hotspot/profile/add",
+                    "=name=hs-profile-beamspot",
+                    "=hotspot-address=192.168.89.1",
+                    "=dns-name=beamspot.net",
+                    "=login-by=http-chap,http-pap,cookie",
+                    "=html-directory=$defaultHtmlDir"
+                )
+            }
+            writeSentence(profileCmd)
+            readResponseSentenceGroup()
+
+            // 6. Configure Hotspot Server
+            writeSentence(listOf("/ip/hotspot/print"))
+            val hotspotPrint = readResponseSentenceGroup()
+            val existingHotspot = hotspotPrint.find { sentence ->
+                sentence.any { it == "=name=hs-server-beamspot" || it == "name=hs-server-beamspot" }
+            }
+            val hotspotCmd = if (existingHotspot != null) {
+                val hsId = existingHotspot.find { it.startsWith("=.id=") || it.startsWith(".id=") }?.substringAfter("=") ?: "hs-server-beamspot"
+                listOf("/ip/hotspot/set", "=.id=$hsId", "=interface=$wlanName", "=address-pool=hs-pool-beamspot", "=profile=hs-profile-beamspot")
+            } else {
+                listOf("/ip/hotspot/add", "=name=hs-server-beamspot", "=interface=$wlanName", "=address-pool=hs-pool-beamspot", "=profile=hs-profile-beamspot", "=disabled=no")
+            }
+            writeSentence(hotspotCmd)
+            readResponseSentenceGroup()
+
+            // 7. Configure Walled Garden Entries
+            writeSentence(listOf("/ip/hotspot/walled-garden/print"))
+            val wgPrint = readResponseSentenceGroup()
+            val allowedHosts = listOf(
+                "beamspott.up.railway.app",
+                "*.intasend.com",
+                "*.google.com",
+                "*.googleapis.com",
+                "*.gstatic.com",
+                "*.tailwindcss.com"
+            )
+            for (host in allowedHosts) {
+                val exists = wgPrint.flatten().any { it == "=dst-host=$host" || it == "dst-host=$host" }
+                if (!exists) {
+                    writeSentence(listOf("/ip/hotspot/walled-garden/add", "=dst-host=$host", "=action=allow"))
+                    readResponseSentenceGroup()
+                }
+            }
+
+            Pair(true, "Hotspot successfully configured on guest interface!")
+        } catch (e: Exception) {
+            Pair(false, "Hotspot configuration failed: ${e.localizedMessage}")
         }
     }
 
@@ -2439,6 +2760,58 @@ class RouterOsApiClient(
             resp.flatten()
                 .filter { it.startsWith("=mac-address=") }
                 .map { it.substringAfter("=") }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun checkHotspotHosts(): List<Map<String, String>> {
+        return try {
+            writeSentence(listOf("/ip/hotspot/host/print"))
+            val resp = readResponseSentenceGroup()
+            val hosts = mutableListOf<Map<String, String>>()
+            for (sentence in resp) {
+                if (sentence.firstOrNull() == "!re") {
+                    val map = mutableMapOf<String, String>()
+                    for (word in sentence) {
+                        if (word.startsWith("=")) {
+                            val parts = word.removePrefix("=").split("=", limit = 2)
+                            if (parts.size == 2) {
+                                map[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                    if (map.containsKey("mac-address")) {
+                        hosts.add(map)
+                    }
+                }
+            }
+            hosts
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun getDhcpLeases(): List<Map<String, String>> {
+        return try {
+            writeSentence(listOf("/ip/dhcp-server/lease/print"))
+            val resp = readResponseSentenceGroup()
+            val leases = mutableListOf<Map<String, String>>()
+            for (sentence in resp) {
+                if (sentence.firstOrNull() == "!re") {
+                    val map = mutableMapOf<String, String>()
+                    for (word in sentence) {
+                        if (word.startsWith("=")) {
+                            val parts = word.removePrefix("=").split("=", limit = 2)
+                            if (parts.size == 2) {
+                                map[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                    leases.add(map)
+                }
+            }
+            leases
         } catch (e: Exception) {
             emptyList()
         }
@@ -2948,6 +3321,9 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     var isPollingGuests by remember { mutableStateOf(false) }
     var guestConnectedMac by remember { mutableStateOf<String?>(null) }
     var guestConnectedIp by remember { mutableStateOf<String?>(null) }
+    var detectedHosts by remember { mutableStateOf<List<Map<String, String>>>(emptyList()) }
+    var dhcpLeases by remember { mutableStateOf<List<Map<String, String>>>(emptyList()) }
+    var routerConnectionLost by remember { mutableStateOf(false) }
     
     val client = remember(ip, port) {
         RouterOsApiClient(ip, port.toIntOrNull() ?: 8728)
@@ -3103,31 +3479,45 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
     
     LaunchedEffect(currentStep, isPollingGuests) {
         if (currentStep == 5 && isPollingGuests) {
-            while (guestConnectedMac == null) {
+            while (true) {
                 if (vm.isDemoMode) {
-                    delay(1000)
+                    delay(2000)
                 } else {
-                    logs.add("Polling active hotspot clients via RouterOS API...")
-                    val clients = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         try {
                             if (client.connect()) {
                                 if (client.login(username, password).first) {
-                                    client.checkActiveHotspotClients()
-                                } else emptyList()
-                            } else emptyList()
+                                    val hosts = client.checkHotspotHosts()
+                                    val leases = client.getDhcpLeases()
+                                    Triple(true, hosts, leases)
+                                } else {
+                                    Triple(false, emptyList(), emptyList())
+                                }
+                            } else {
+                                Triple(false, emptyList(), emptyList())
+                            }
                         } catch (e: Exception) {
-                            emptyList()
+                            Triple(false, emptyList(), emptyList())
                         } finally {
                             client.disconnect()
                         }
                     }
-                    if (clients.isNotEmpty()) {
-                        guestConnectedMac = clients.first()
-                        guestConnectedIp = "192.168.88.254"
-                        logs.add("🔥 SUCCESS: Device connected! MAC: $guestConnectedMac")
-                        break
+
+                    if (result.first) {
+                        routerConnectionLost = false
+                        detectedHosts = result.second
+                        dhcpLeases = result.third
+                        
+                        if (detectedHosts.isNotEmpty()) {
+                            val firstHost = detectedHosts.first()
+                            guestConnectedMac = firstHost["mac-address"]
+                            guestConnectedIp = firstHost["address"]
+                        }
+                    } else {
+                        routerConnectionLost = true
+                        logs.add("⚠️ Lost connection to your router. Reconnecting...")
                     }
-                    delay(3000)
+                    delay(2000)
                 }
             }
         }
@@ -3435,7 +3825,8 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                             )
                                             Button(
                                                 onClick = {
-                                                    android.widget.Toast.makeText(context, "Generic Setup flow is currently in development!", android.widget.Toast.LENGTH_LONG).show()
+                                                    vm.routerIp = detectedGatewayIp
+                                                    nav.navigate(Route.GENERIC_ROUTER_SETUP)
                                                 },
                                                 colors = ButtonDefaults.buttonColors(containerColor = Cyan),
                                                 shape = RoundedCornerShape(10.dp),
@@ -4247,44 +4638,84 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 enabled = !isApplyingWireless && ssid.isNotBlank() && wifiPass.length >= 8
                             ) {
                                 isApplyingWireless = true
-                                logs.add("Configuring interface wireless ssid='$ssid' on default interface...")
+                                logs.add("Configuring guest Wi-Fi broadcast SSID='$ssid' on router...")
                                 scope.launch {
-                                    delay(1200)
                                     if (vm.isDemoMode) {
+                                        delay(1200)
                                         vm.routerGuestSsid = ssid
                                         vm.routerGuestPassword = wifiPass
                                         vm.beamSpotNetworkName = ssid
+                                        sessionManager.saveHostSetup("demo-id", "HOME_ROUTER", ssid, vm.pricePerMin)
+                                        
+                                        val prefs = context.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                                        prefs.edit().putString("beam_spot_network_password", wifiPass).apply()
+
                                         wirelessApplied = true
-                                        logs.add("✅ SSID updated to: $ssid")
-                                        logs.add("✅ Security profiles pre-shared key updated.")
-                                        logs.add("Wireless interface enabled and broadcasting!")
+                                        logs.add("✅ Network '$ssid' created successfully")
+                                        isApplyingWireless = false
+                                        delay(1500)
+                                        currentStep = 4
                                     } else {
-                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                            if (client.connect()) {
-                                                if (client.login(username, password).first) {
-                                                    val res = client.applyWirelessSettings(ssid, wifiPass)
-                                                    client.disconnect()
-                                                    res
-                                                } else {
-                                                    client.disconnect()
-                                                    Pair(false, "Auth expired")
+                                        var attempt = 1
+                                        var success = false
+                                        var errorMsg = ""
+                                        while (attempt <= 2 && !success) {
+                                            logs.add("Attempt $attempt: Connecting and applying wireless settings...")
+                                            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                try {
+                                                    if (client.connect()) {
+                                                        val loginRes = client.login(username, password)
+                                                        if (loginRes.first) {
+                                                            val applyRes = client.applyWirelessSettings(ssid, wifiPass)
+                                                            client.disconnect()
+                                                            applyRes
+                                                        } else {
+                                                            client.disconnect()
+                                                            Pair(false, "Authentication failed: ${loginRes.second}")
+                                                        }
+                                                    } else {
+                                                        Pair(false, "Connection failed: Unable to connect to router")
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Pair(false, "Error: ${e.localizedMessage}")
                                                 }
+                                            }
+                                            
+                                            if (result.first) {
+                                                success = true
+                                                logs.add("✅ Wireless settings successfully verified on router!")
                                             } else {
-                                                Pair(false, "Timeout")
+                                                errorMsg = result.second
+                                                logs.add("⚠️ Attempt $attempt failed: $errorMsg")
+                                                attempt++
                                             }
                                         }
-                                        logs.add(result.second)
-                                        if (result.first) {
+                                        
+                                        isApplyingWireless = false
+                                        if (success) {
                                             vm.routerGuestSsid = ssid
                                             vm.routerGuestPassword = wifiPass
                                             vm.beamSpotNetworkName = ssid
+                                            
+                                            val prefs = context.getSharedPreferences("beamspot_prefs", Context.MODE_PRIVATE)
+                                            prefs.edit()
+                                                .putString("beam_spot_network_name", ssid)
+                                                .putString("beam_spot_network_password", wifiPass)
+                                                .apply()
+                                                
                                             wirelessApplied = true
-                                            logs.add("✅ Wireless broadcast successfully configured!")
+                                            logs.add("🔥 Network '$ssid' created successfully")
+                                            delay(2000)
+                                            currentStep = 4
                                         } else {
-                                            logs.add("❌ Failed to push wireless config. Make sure standard interface wlan1 exists, or configure manual SSID in WinBox.")
+                                            logs.add("❌ Something went wrong applying your network settings. Please try again.")
+                                            if (errorMsg.contains("Connection failed")) {
+                                                logs.add("Redirecting back to Router Auto-Detection...")
+                                                delay(2000)
+                                                currentStep = 0
+                                            }
                                         }
                                     }
-                                    isApplyingWireless = false
                                 }
                             }
                             
@@ -4317,10 +4748,10 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 ) {
                                     Text("PROPOSED RATE", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                     Text(
-                                        text = "KSh %.2f".format(pricePerMin),
+                                        text = "KSh %.2f / Minute".format(pricePerMin),
                                         color = Amber,
                                         fontWeight = FontWeight.Black,
-                                        fontSize = 32.sp
+                                        fontSize = 28.sp
                                     )
                                     Text(
                                         text = "Equivalent to KSh %.0f / Hour".format(pricePerMin * 60),
@@ -4331,12 +4762,21 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 }
                             }
                             
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(12.dp))
+                            
+                            Text(
+                                text = "Set your price per minute",
+                                color = Paper,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            
+                            Spacer(Modifier.height(4.dp))
                             
                             androidx.compose.material3.Slider(
                                 value = pricePerMin,
-                                onValueChange = { pricePerMin = (Math.round(it * 2f) / 2f).coerceIn(1f, 10f) },
-                                valueRange = 1f..10f,
+                                onValueChange = { pricePerMin = (Math.round(it * 2f) / 2f).coerceIn(0.5f, 20f) },
+                                valueRange = 0.5f..20f,
                                 colors = androidx.compose.material3.SliderDefaults.colors(
                                     thumbColor = Amber,
                                     activeTrackColor = Amber,
@@ -4349,9 +4789,18 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Min: KSh 1.0/m", color = PaperDim, fontSize = 11.sp)
-                                Text("Max: KSh 10.0/m", color = PaperDim, fontSize = 11.sp)
+                                Text("Min: KSh 0.50/m", color = PaperDim, fontSize = 11.sp)
+                                Text("Max: KSh 20.00/m", color = PaperDim, fontSize = 11.sp)
                             }
+                            
+                            Spacer(Modifier.height(4.dp))
+                            
+                            Text(
+                                text = "You can change this anytime from Settings",
+                                color = PaperDim,
+                                fontSize = 11.sp,
+                                style = androidx.compose.ui.text.TextStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                            )
                             
                             Spacer(Modifier.weight(1f))
                             
@@ -4363,14 +4812,78 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 isApplyingPricing = true
                                 logs.add("Configuring RouterOS `/ip hotspot` settings...")
                                 scope.launch {
-                                    delay(1000)
-                                    vm.pricePerMin = pricePerMin.toDouble()
-                                    logs.add("Enabling hotspot service on interface...")
-                                    logs.add("Adding user profiles and walled-garden parameters...")
-                                    logs.add("Pointed captive portal redirect to public gateway: https://demo.ispledger.com")
-                                    logs.add("✅ Hotspot system live on router!")
-                                    pricingApplied = true
-                                    isApplyingPricing = false
+                                    if (vm.isDemoMode) {
+                                        delay(1500)
+                                        vm.pricePerMin = pricePerMin.toDouble()
+                                        sessionManager.saveHostSetup("demo-id", "HOME_ROUTER", ssid, pricePerMin.toDouble())
+                                        logs.add("✅ Simulated Hotspot live on guest interface")
+                                        logs.add("✅ Simulated listing registered on backend.")
+                                        pricingApplied = true
+                                        isApplyingPricing = false
+                                        delay(1000)
+                                        currentStep = 5
+                                    } else {
+                                        val hotspotRes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            try {
+                                                if (client.connect()) {
+                                                    val loginRes = client.login(username, password)
+                                                    if (loginRes.first) {
+                                                        val hsRes = client.configureHotspot()
+                                                        client.disconnect()
+                                                        hsRes
+                                                    } else {
+                                                        client.disconnect()
+                                                        Pair(false, "Authentication failed: ${loginRes.second}")
+                                                    }
+                                                } else {
+                                                    Pair(false, "Connection failed: Unable to connect to router")
+                                                }
+                                            } catch (e: Exception) {
+                                                Pair(false, "Error: ${e.localizedMessage}")
+                                            }
+                                        }
+                                        
+                                        logs.add(hotspotRes.second)
+                                        if (hotspotRes.first) {
+                                            logs.add("Registering network listing on backend...")
+                                            val bssidToUse = detectedGatewayMac.ifEmpty { "00:11:22:33:44:55" }
+                                            
+                                            val backendRes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                try {
+                                                    val req = CreateListingRequest(
+                                                        connectionType = "HOME_ROUTER",
+                                                        pricePerMin = pricePerMin.toDouble(),
+                                                        ssid = ssid,
+                                                        bssid = bssidToUse,
+                                                        beamSpotSsid = ssid + "_BeamSpot",
+                                                        routerIp = ip,
+                                                        routerApiPort = port.toIntOrNull() ?: 8728,
+                                                        routerUsername = username,
+                                                        routerPassword = password
+                                                    )
+                                                    val response = RetrofitClient.apiService.createListing(req)
+                                                    Pair(true, response.listing.id)
+                                                } catch (e: Exception) {
+                                                    Pair(false, e.localizedMessage ?: "Unknown backend error")
+                                                }
+                                            }
+                                            
+                                            if (backendRes.first) {
+                                                val listingId = backendRes.second
+                                                logs.add("✅ Listing registered successfully on backend! ID: $listingId")
+                                                vm.pricePerMin = pricePerMin.toDouble()
+                                                sessionManager.saveHostSetup(listingId, "HOME_ROUTER", ssid, pricePerMin.toDouble())
+                                                pricingApplied = true
+                                                delay(1500)
+                                                currentStep = 5
+                                            } else {
+                                                logs.add("❌ Backend listing registration failed: ${backendRes.second}")
+                                            }
+                                        } else {
+                                            logs.add("❌ Failed to configure Hotspot on router.")
+                                        }
+                                        isApplyingPricing = false
+                                    }
                                 }
                             }
                             
@@ -4391,37 +4904,97 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                             
                             Spacer(Modifier.height(12.dp))
                             
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(if (guestConnectedMac != null) Emerald.copy(0.12f) else Cyan.copy(0.05f))
-                                    .border(1.dp, if (guestConnectedMac != null) Emerald else Cyan.copy(0.2f), RoundedCornerShape(16.dp))
-                                    .padding(20.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            if (routerConnectionLost) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFFE74C3C).copy(0.15f))
+                                        .border(1.dp, Color(0xFFE74C3C), RoundedCornerShape(12.dp))
+                                        .padding(12.dp)
                                 ) {
-                                    if (guestConnectedMac == null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFE74C3C))
+                                        Text("Lost connection to your router. Reconnecting...", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Spacer(Modifier.height(12.dp))
+                            }
+                            
+                            if (guestConnectedMac == null) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(Cyan.copy(0.05f))
+                                        .border(1.dp, Cyan.copy(0.2f), RoundedCornerShape(16.dp))
+                                        .padding(20.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                    ) {
                                         androidx.compose.material3.CircularProgressIndicator(
                                             color = Cyan,
                                             modifier = Modifier.size(28.dp)
                                         )
                                         Column {
-                                            Text("Waiting for guest connection...", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                            Text("A phone must join '${ssid}' to authorize", color = PaperDim, fontSize = 12.sp)
+                                            Text("Waiting for a device to connect...", color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            Text("Please connect a device to '${ssid}'", color = PaperDim, fontSize = 12.sp)
                                         }
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Filled.CheckCircle,
-                                            contentDescription = null,
-                                            tint = Emerald,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                        Column {
-                                            Text("Guest Connection Verified!", color = Emerald, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                            Text("MAC: $guestConnectedMac", color = Paper, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                }
+                            } else {
+                                Text("Detected Devices on Hotspot:", color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(8.dp))
+                                
+                                val listToUse = if (vm.isDemoMode) {
+                                    listOf(mapOf("mac-address" to (guestConnectedMac ?: "02:1A:3F:8B:C9:4D"), "address" to (guestConnectedIp ?: "192.168.88.254"), "authorized" to "false"))
+                                } else {
+                                    detectedHosts
+                                }
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    for (host in listToUse) {
+                                        val mac = host["mac-address"] ?: ""
+                                        val ipAddress = host["address"] ?: ""
+                                        val authorized = host["authorized"] == "true"
+                                        val lease = dhcpLeases.find { (it["mac-address"] ?: "").equals(mac, ignoreCase = true) }
+                                        val deviceName = lease?.get("host-name") ?: "Guest Device"
+                                        
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(if (authorized) Emerald.copy(0.12f) else Amber.copy(0.12f))
+                                                .border(1.dp, if (authorized) Emerald else Amber, RoundedCornerShape(16.dp))
+                                                .padding(16.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (authorized) Icons.Filled.CheckCircle else Icons.Filled.Info,
+                                                    contentDescription = null,
+                                                    tint = if (authorized) Emerald else Amber,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(deviceName, color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                    Text("MAC: $mac | IP: $ipAddress", color = PaperDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                                    Spacer(Modifier.height(2.dp))
+                                                    Text(
+                                                        text = if (authorized) "Authenticated (Active)" else "Associated but not yet authenticated (Gated)",
+                                                        color = if (authorized) Emerald else Amber,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -4448,7 +5021,7 @@ fun RouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                             Spacer(Modifier.weight(1f))
                             
                             BeamButton(
-                                label = "Finish & Launch Dashboard 🚀",
+                                label = "Finish Setup 🚀",
                                 color = Emerald,
                                 enabled = guestConnectedMac != null
                             ) {
@@ -6741,11 +7314,27 @@ fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
     val helper  = remember { WifiScanHelper(context) }
     val scope   = rememberCoroutineScope()
 
-    // Poll real stats every 5 seconds
-    LaunchedEffect(Unit) {
-        while (true) {
-            vm.refreshStats(helper)
-            delay(5_000)
+    // Lifecycle-aware background-paused polling
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var isAppInForeground by remember { mutableStateOf(true) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            isAppInForeground = event == androidx.lifecycle.Lifecycle.Event.ON_RESUME || 
+                                event == androidx.lifecycle.Lifecycle.Event.ON_START
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(isAppInForeground) {
+        if (isAppInForeground) {
+            while (true) {
+                vm.refreshStats(helper)
+                delay(5_000)
+            }
         }
     }
 
@@ -6754,6 +7343,16 @@ fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
     var showWithdrawSuccessDialog by remember { mutableStateOf(false) }
     var showWithdrawErrorDialog by remember { mutableStateOf("") }
     var isWithdrawing by remember { mutableStateOf(false) }
+
+    if (!vm.isFirstStatsFetchCompleted) {
+        Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                CircularProgressIndicator(color = Cyan)
+                Text("Loading dashboard data...", color = PaperDim, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+            }
+        }
+        return
+    }
 
     if (showWithdrawSuccessDialog) {
         AlertDialog(
@@ -6864,104 +7463,170 @@ fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
                 Text(vm.userName, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(shape = RoundedCornerShape(20.dp), color = if (vm.vpnActive) Cyan.copy(0.12f) else PaperDim.copy(0.1f)) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.vpnActive) Cyan else PaperDim))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                if (vm.selectedMode == "router") {
+                    Surface(shape = RoundedCornerShape(20.dp), color = if (vm.routerReachable) Cyan.copy(0.12f) else Color(0xFFFF6B6B).copy(0.12f)) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.routerReachable) Cyan else Color(0xFFFF6B6B)))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (vm.routerReachable) "ROUTER ONLINE" else "ROUTER OFFLINE", color = if (vm.routerReachable) Cyan else Color(0xFFFF6B6B), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                } else {
+                    Surface(shape = RoundedCornerShape(20.dp), color = if (vm.vpnActive) Cyan.copy(0.12f) else PaperDim.copy(0.1f)) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(if (vm.vpnActive) Cyan else PaperDim))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (vm.vpnActive) "LIVE" else "OFF", color = if (vm.vpnActive) Cyan else PaperDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                        }
                     }
                 }
             }
         }
 
-        // Network name being broadcast
-        val isHotspotRunning = BeamSpotVpnService.isRunning && BeamSpotVpnService.actualHotspotSsid.isNotEmpty()
-        if (isHotspotRunning || vm.beamSpotNetworkName.isNotEmpty()) {
-            val displaySsid = if (isHotspotRunning) BeamSpotVpnService.actualHotspotSsid else vm.beamSpotNetworkName
-            val displayPass = if (isHotspotRunning) BeamSpotVpnService.actualHotspotPassword else ""
-
-            Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(12.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
-                Column(Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Broadcasting Hotspot SSID", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                            Text(displaySsid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        }
-                    }
-                    if (displayPass.isNotEmpty()) {
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Lock, null, tint = Cyan, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text("Hotspot Password (WPA2)", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                                Text(displayPass, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    HorizontalDivider(color = BorderLine)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        if (isHotspotRunning) 
-                            "Dual-Role STA+AP: ${if (BeamSpotVpnService.isStaApSupported) "Supported ✅ (Sharing upstream WiFi)" else "Limited ⚠️ (Sharing mobile data)"}"
-                        else 
-                            "Dual-Role STA+AP: Checking support...", 
-                        color = if (BeamSpotVpnService.isStaApSupported) Cyan else Amber, 
-                        fontSize = 11.sp, 
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Active Capacity: ${BeamSpotVpnService.activeLocalClientsCount} / ${BeamSpotVpnService.MAX_GUESTS} guests",
-                        color = PaperDim,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    HorizontalDivider(color = BorderLine)
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "⚠️ If nearby devices cannot see \"$displaySsid\", your device may be broadcasting using its hardware-default name. In some Android versions, you must manually matching-rename your hotspot SSID to \"$displaySsid\" and toggle Hotspot ON in system settings.",
-                        color = Amber,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = {
-                            val intent = Intent().apply {
-                                action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            try {
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                try {
-                                    val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                    context.startActivity(fallbackIntent)
-                                } catch (_: Exception) {}
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Amber.copy(0.12f), contentColor = Amber),
-                        border = BorderStroke(1.dp, Amber.copy(0.3f)),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().height(36.dp)
-                    ) {
-                        Icon(Icons.Filled.Settings, null, tint = Amber, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open Hotspot & Tethering Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        // Router Mode: Unreachable Prominent Banner
+        if (vm.selectedMode == "router" && !vm.routerReachable) {
+            Surface(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF3E2723), // Dark warm red/brown tone for error/warning banner
+                border = BorderStroke(1.dp, Color(0xFFFF6B6B))
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Filled.Warning, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(20.dp).padding(top = 2.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Can't reach your router right now", color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Guests may not be able to connect or pay. Check your router's power and internet connection.",
+                            color = PaperDim,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
                     }
                 }
             }
             Spacer(Modifier.height(12.dp))
         }
 
-        // High Guest Count Warning Note (Item 21)
+        if (vm.selectedMode == "router") {
+            // Router Mode Network Details
+            val displaySsid = vm.beamSpotNetworkName.ifEmpty { vm.routerGuestSsid }
+            if (displaySsid.isNotEmpty()) {
+                Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(12.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Router Hotspot SSID", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text(displaySsid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = BorderLine)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Captive portal billing active. Connected guests are forced to pay KSh ${vm.pricePerMin}/min to get internet access.",
+                            color = Cyan,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        } else {
+            // VPN/Hotspot Mode broadcast card
+            val isHotspotRunning = BeamSpotVpnService.isRunning && BeamSpotVpnService.actualHotspotSsid.isNotEmpty()
+            if (isHotspotRunning || vm.beamSpotNetworkName.isNotEmpty()) {
+                val displaySsid = if (isHotspotRunning) BeamSpotVpnService.actualHotspotSsid else vm.beamSpotNetworkName
+                val displayPass = if (isHotspotRunning) BeamSpotVpnService.actualHotspotPassword else ""
+
+                Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(12.dp), color = Panel, border = BorderStroke(1.dp, BorderLine)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Wifi, null, tint = Cyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Broadcasting Hotspot SSID", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text(displaySsid, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            }
+                        }
+                        if (displayPass.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Lock, null, tint = Cyan, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("Hotspot Password (WPA2)", color = PaperDim, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    Text(displayPass, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = BorderLine)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (isHotspotRunning) 
+                                "Dual-Role STA+AP: ${if (BeamSpotVpnService.isStaApSupported) "Supported ✅ (Sharing upstream WiFi)" else "Limited ⚠️ (Sharing mobile data)"}"
+                            else 
+                                "Dual-Role STA+AP: Checking support...", 
+                            color = if (BeamSpotVpnService.isStaApSupported) Cyan else Amber, 
+                            fontSize = 11.sp, 
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Active Capacity: ${BeamSpotVpnService.activeLocalClientsCount} / ${BeamSpotVpnService.MAX_GUESTS} guests",
+                            color = PaperDim,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        HorizontalDivider(color = BorderLine)
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "⚠️ If nearby devices cannot see \"$displaySsid\", your device may be broadcasting using its hardware-default name. In some Android versions, you must manually matching-rename your hotspot SSID to \"$displaySsid\" and toggle Hotspot ON in system settings.",
+                            color = Amber,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                val intent = Intent().apply {
+                                    action = "android.settings.PORTABLE_HOTSPOT_SETTINGS"
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                try {
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(fallbackIntent)
+                                    } catch (_: Exception) {}
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Amber.copy(0.12f), contentColor = Amber),
+                            border = BorderStroke(1.dp, Amber.copy(0.3f)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(36.dp)
+                        ) {
+                            Icon(Icons.Filled.Settings, null, tint = Amber, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Open Hotspot & Tethering Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+
+        // High Guest Count Warning Note
         if (vm.guestCount > 5) {
             Surface(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
@@ -6987,26 +7652,35 @@ fun DashboardScreen(rootNav: NavHostController, vm: AppViewModel) {
             Spacer(Modifier.height(6.dp))
         }
 
-        // Real stats grid
+        // Stats grid
         Column(Modifier.padding(horizontal = 20.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatCard("Download", "${String.format("%.1f", vm.downloadMbps)} Mbps", Icons.Filled.ArrowDownward, Cyan, Modifier.weight(1f))
-                StatCard("Upload", "${String.format("%.1f", vm.uploadMbps)} Mbps", Icons.Filled.ArrowUpward, Amber, Modifier.weight(1f))
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatCard("Signal", "${vm.signalBars}/5 bars  ${vm.signalRssi} dBm", Icons.Filled.SignalCellularAlt, Cyan, Modifier.weight(1f))
-                StatCard("Distance", "${String.format("%.1f", vm.distanceMeters)} m to router", Icons.Filled.SocialDistance, Amber, Modifier.weight(1f))
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatCard("Link speed", "${vm.linkSpeedMbps} Mbps", Icons.Filled.Speed, Cyan, Modifier.weight(1f))
-                StatCard("Guests", "${vm.guestCount}", Icons.Filled.People, Amber, Modifier.weight(1f))
+            if (vm.selectedMode == "router") {
+                // Polished, strictly honest Router Mode dashboard grids without any simulated/fake elements
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("Router Status", if (vm.routerReachable) "ONLINE" else "UNREACHABLE", if (vm.routerReachable) Icons.Filled.WifiTethering else Icons.Filled.PortableWifiOff, if (vm.routerReachable) Cyan else Color(0xFFFF6B6B), Modifier.weight(1f))
+                    StatCard("Active Guests", "${vm.guestCount}", Icons.Filled.People, Amber, Modifier.weight(1f))
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("Download", "${String.format("%.1f", vm.downloadMbps)} Mbps", Icons.Filled.ArrowDownward, Cyan, Modifier.weight(1f))
+                    StatCard("Upload", "${String.format("%.1f", vm.uploadMbps)} Mbps", Icons.Filled.ArrowUpward, Amber, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("Signal", "${vm.signalBars}/5 bars  ${vm.signalRssi} dBm", Icons.Filled.SignalCellularAlt, Cyan, Modifier.weight(1f))
+                    StatCard("Distance", "${String.format("%.1f", vm.distanceMeters)} m to router", Icons.Filled.SocialDistance, Amber, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("Link speed", "${vm.linkSpeedMbps} Mbps", Icons.Filled.Speed, Cyan, Modifier.weight(1f))
+                    StatCard("Guests", "${vm.guestCount}", Icons.Filled.People, Amber, Modifier.weight(1f))
+                }
             }
             Spacer(Modifier.height(10.dp))
             StatCard("Today's Earnings", "KSh ${String.format("%.2f", vm.todayEarnings)}", Icons.Filled.AccountBalanceWallet, Cyan, Modifier.fillMaxWidth())
             Spacer(Modifier.height(20.dp))
-            // Withdraw button — primary action stays on Dashboard for quick access
+
+            // Withdraw button
             BeamButton(
                 label = if (isWithdrawing) "Processing Withdraw…" else "Withdraw to ${vm.payoutMethod.uppercase()}",
                 color = Cyan,
