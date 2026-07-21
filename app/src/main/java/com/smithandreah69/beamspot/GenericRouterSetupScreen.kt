@@ -200,6 +200,35 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
         return Triple(uReasonable, pReasonable, uReasonable && pReasonable)
     }
 
+    fun pollForSuccessWithoutNavigation(webView: WebView, attemptsLeft: Int) {
+        if (statusType != "SUBMITTING") return
+        if (attemptsLeft <= 0) {
+            statusType = "MANUAL_FALLBACK"
+            statusMessage = "We couldn't automatically log in. Please log in manually below."
+            isPanelExpanded = false
+            webView.reload()
+            return
+        }
+        webView.postDelayed({
+            if (statusType != "SUBMITTING") return@postDelayed
+            webView.evaluateJavascript(scannerJs) { result ->
+                val (_, _, foundBoth) = parseScanResult(result ?: "")
+                if (!foundBoth) {
+                    // Login form fields are no longer present on the page — generic signal of success,
+                    // regardless of what specific router this is or whether navigation occurred.
+                    statusType = "SUCCESS"
+                    statusMessage = "Logged in successfully to router!"
+                    vm.routerUsername = username
+                    vm.routerPassword = password
+                    vm.routerIp = ip
+                    vm.selectedMode = "router"
+                } else {
+                    pollForSuccessWithoutNavigation(webView, attemptsLeft - 1)
+                }
+            }
+        }, 1500)
+    }
+
     // Colors
     val Ink = Color(0xFF0E1614)
     val Panel = Color(0xFF1A2925)
@@ -451,6 +480,8 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                     evaluateJavascript(autofillJs) { autofillResult ->
                                                         android.util.Log.d("GenericRouterSetup", "Autofill Result: $autofillResult")
                                                     }
+                                                    
+                                                    view?.let { pollForSuccessWithoutNavigation(it, 20) }
                                                 } else {
                                                     val isLoginUrl = currentUrl.contains("login", ignoreCase = true) || 
                                                                      currentUrl.contains("auth", ignoreCase = true) ||
@@ -469,6 +500,7 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                                         statusType = "MANUAL_FALLBACK"
                                                         statusMessage = "We couldn't automatically find the login form. Please log in manually below."
                                                         isPanelExpanded = false
+                                                        view?.reload() // force a fresh page load so any one-time session token is regenerated, preventing stale tokens
                                                     }
                                                 }
                                             }
