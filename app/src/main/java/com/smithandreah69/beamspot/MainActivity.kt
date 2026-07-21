@@ -555,6 +555,9 @@ data class EarningsRecord(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (BuildConfig.DEBUG) {
+            android.webkit.WebView.setWebContentsDebuggingEnabled(true)
+        }
         val sessionManager = SessionManager(this)
         val conn = sessionManager.getRouterConnection()
         android.util.Log.d("BeamSpotInit", "Loaded Router Connection from SessionManager on App Start: $conn")
