@@ -463,6 +463,11 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                     factory = { ctx ->
                         WebView(ctx).apply {
                             webViewRef = this
+
+                            val cookieManager = android.webkit.CookieManager.getInstance()
+                            cookieManager.setAcceptCookie(true)
+                            cookieManager.setAcceptThirdPartyCookies(this, true)
+
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
@@ -472,8 +477,6 @@ fun GenericRouterSetupScreen(nav: NavHostController, vm: AppViewModel) {
                                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                 userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                             }
-                            android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-                            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     super.onPageStarted(view, url, favicon)
